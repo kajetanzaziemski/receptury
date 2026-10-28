@@ -4,84 +4,201 @@
   <base target="_top">
   <meta charset="utf-8">
   <style>
-    body { font-family: Arial, sans-serif; font-size: 13px; margin: 0; padding: 12px; }
-    h3 { margin: 0 0 8px; font-size: 15px; }
-    label { display: block; margin-bottom: 4px; }
-    input[type=text] { width: 100%; box-sizing: border-box; padding: 6px; margin-bottom: 6px; }
-    select { width: 100%; box-sizing: border-box; padding: 6px; }
-    .row { margin: 10px 0; }
-    button { padding: 6px 10px; cursor: pointer; }
-    button.primary { background: #1a73e8; color: #fff; border: 0; border-radius: 3px; }
-    button:disabled { opacity: .5; cursor: default; }
-    #msg { margin-top: 8px; white-space: pre-wrap; }
-    #msg.err { color: #b00020; }
-    #msg.ok { color: #137333; }
-    #warn { margin-top: 8px; white-space: pre-wrap; background: #fff4ce; border: 1px solid #e0b100; padding: 6px; display: none; }
+    body { font-family: Arial, sans-serif; font-size: 13px; color: #333; padding: 12px; }
+    h3 { margin: 0 0 8px; font-size: 14px; font-weight: 600; color: #444; }
+    .status { margin-top: 10px; font-size: 12px; color: #2a7d2a; min-height: 16px; white-space: pre-wrap; }
+    .status.error { color: #b3261e; }
+    .warn { margin-top: 8px; white-space: pre-wrap; background: #fff4ce; border: 1px solid #e0b100; padding: 6px; font-size: 12px; display: none; }
+    button { font: inherit; }
+    #submit { margin-top: 12px; padding: 6px 14px; font-size: 13px; }
+    #refresh { margin-top: 14px; font-size: 11px; padding: 3px 8px; }
+    button:disabled { cursor: not-allowed; }
+
+    .dd { position: relative; }
+    .dd-btn {
+      width: 100%; display: flex; align-items: center; gap: 8px; padding: 6px;
+      text-align: left; cursor: pointer; background: #fff;
+      border: 1px solid #767676; border-radius: 3px; box-sizing: border-box;
+    }
+    .dd-btn::after { content: '\25BE'; color: #777; margin-left: auto; }
+    .dd-btn.invalid { border-color: #b3261e; background: #fdecea; box-shadow: 0 0 0 1px #b3261e; }
+    .dd-list {
+      display: none; position: absolute; left: 0; right: 0; top: 100%; margin-top: 2px;
+      max-height: 280px; overflow-y: auto; z-index: 10; background: #fff;
+      border: 1px solid #aaa; border-radius: 3px; box-shadow: 0 2px 8px rgba(0,0,0,.2);
+    }
+    .dd.open .dd-list { display: block; }
+    .dd-filter {
+      position: sticky; top: 0; width: 100%; box-sizing: border-box; padding: 6px;
+      font: inherit; border: 0; border-bottom: 1px solid #ddd; outline: none; background: #fafafa;
+    }
+    .dd-item {
+      display: flex; gap: 8px; width: 100%; padding: 6px; border: 0; background: none;
+      text-align: left; cursor: pointer; align-items: baseline;
+    }
+    .dd-item:hover, .dd-item:focus { background: #e8f0fe; outline: none; }
+    .dd-label, .dd-placeholder { flex: 1; overflow-wrap: anywhere; }
+    .dd-placeholder { color: #777; }
+    .dd-empty { padding: 8px 6px; color: #777; font-size: 11px; }
+    .note { color: #777; font-size: 11px; line-height: 1.4; margin: 8px 0 0; }
   </style>
 </head>
 <body>
-  <h3>Receptury</h3>
+  <h3>Wczytaj recepturę</h3>
 
-  <label for="filter">Produkt (Receptura / Asortyment)</label>
-  <input type="text" id="filter" placeholder="Szukaj…" oninput="render()">
-  <select id="entry"></select>
-
-  <div class="row">
-    <button class="primary" id="load" onclick="load()">Wczytaj</button>
-    <button onclick="refresh()">Odśwież listę</button>
+  <div class="dd" id="dd">
+    <button type="button" class="dd-btn" id="ddBtn"></button>
+    <div class="dd-list" id="ddList">
+      <input type="text" class="dd-filter" id="filter" placeholder="Szukaj..." autocomplete="off">
+      <div id="items"></div>
+    </div>
   </div>
-  <div id="warn"></div>
-  <div id="msg"></div>
+
+  <button id="submit" type="button">Wczytaj do arkusza</button>
+  <div id="warn" class="warn"></div>
+  <div id="status" class="status"></div>
+
+  <button id="refresh" type="button">Odśwież listę</button>
+  <p class="note">Ponownie ładuje opcje w liście rozwijanej. Użyj jeśli dane źródłowe uległy zmianie.</p>
 
   <script>
+    let entries = [];           // [{ row, label }]
+    let selected = null;        // the chosen entry or null
+
     const $ = id => document.getElementById(id);
-    let entries = [];
 
-    function msg(text, cls) { const m = $('msg'); m.textContent = text || ''; m.className = cls || ''; }
-    function warn(text) { const w = $('warn'); w.textContent = text || ''; w.style.display = text ? 'block' : 'none'; }
-
-    function render() {
-      const sel = $('entry');
-      const prev = sel.value;
-      const q = $('filter').value.trim().toLowerCase();
-      sel.textContent = '';
-      const first = document.createElement('option');
-      first.value = ''; first.textContent = '– wybierz –';
-      sel.appendChild(first);
-      entries.filter(e => !q || e.label.toLowerCase().indexOf(q) >= 0).forEach(e => {
-        const o = document.createElement('option');
-        o.value = e.row; o.textContent = e.label;
-        if (String(e.row) === prev) o.selected = true;
-        sel.appendChild(o);
-      });
-      if (q && !sel.value && sel.options.length > 1) sel.selectedIndex = 1;   // searching: preselect the first hit
+    function setStatus(text, isError) {
+      $('status').className = 'status' + (isError ? ' error' : '');
+      $('status').textContent = text || '';
     }
+    function setWarn(text) {
+      $('warn').textContent = text || '';
+      $('warn').style.display = text ? 'block' : 'none';
+    }
+
+    // The button shows the chosen entry, or the prompt.
+    function renderButton() {
+      const btn = $('ddBtn');
+      btn.replaceChildren();
+      const l = document.createElement('span');
+      l.className = selected ? 'dd-label' : 'dd-placeholder';
+      l.textContent = selected ? selected.label : 'Produkt (Receptura / Asortyment)...';
+      btn.appendChild(l);
+    }
+
+    function renderItems() {
+      const q = $('filter').value.trim().toLowerCase();
+      const box = $('items');
+      box.replaceChildren();
+      const shown = entries.filter(e => !q || e.label.toLowerCase().includes(q));
+
+      if (!shown.length) {
+        const n = document.createElement('div');
+        n.className = 'dd-empty';
+        n.textContent = entries.length ? 'Brak wyników.' : 'Brak danych.';
+        box.appendChild(n);
+        return;
+      }
+
+      shown.forEach(entry => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'dd-item';
+        const l = document.createElement('span');
+        l.className = 'dd-label';
+        l.textContent = entry.label;
+        b.appendChild(l);
+        b.addEventListener('click', () => {
+          selected = entry;
+          $('dd').classList.remove('open');
+          $('ddBtn').classList.remove('invalid');
+          renderButton();
+          setStatus('');
+          setWarn('');
+          $('ddBtn').focus();
+        });
+        box.appendChild(b);
+      });
+    }
+
+    function openList() {
+      $('dd').classList.add('open');
+      $('filter').value = '';
+      renderItems();
+      $('filter').focus();
+    }
+
+    $('ddBtn').addEventListener('click', () => {
+      if ($('dd').classList.contains('open')) $('dd').classList.remove('open');
+      else openList();
+    });
+    $('filter').addEventListener('input', renderItems);
+    $('filter').addEventListener('keydown', e => {
+      if (e.key === 'Escape') { $('dd').classList.remove('open'); $('ddBtn').focus(); }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const first = $('items').querySelector('.dd-item');
+        if (first) first.click();
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        const first = $('items').querySelector('.dd-item');
+        if (first) first.focus();
+      }
+    });
+    $('items').addEventListener('keydown', e => {
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+      e.preventDefault();
+      const els = Array.from($('items').querySelectorAll('.dd-item'));
+      let i = els.indexOf(document.activeElement);
+      i = e.key === 'ArrowDown' ? Math.min(i + 1, els.length - 1) : i - 1;
+      if (i < 0) $('filter').focus(); else els[i].focus();
+    });
+    document.addEventListener('click', e => {
+      if (!$('dd').contains(e.target)) $('dd').classList.remove('open');
+    });
+
+    $('submit').addEventListener('click', function () {
+      if (!selected) {
+        $('ddBtn').classList.add('invalid');
+        setStatus('Wybierz pozycję z listy.', true);
+        return;
+      }
+      const btn = $('submit');
+      btn.disabled = true;
+      setStatus('Wczytywanie...');
+      setWarn('');
+      google.script.run
+        .withSuccessHandler(res => {
+          btn.disabled = false;
+          if (res.error) { setStatus(res.error, true); return; }
+          let t = 'Wczytano ' + res.written + ' komponentów (wartości × ' + res.mass + ').';
+          if (res.added.length) t += '\nDodano na końcu (brak w kolumnie B): ' + res.added.join(', ');
+          setStatus(t);
+          setWarn(res.warning);
+        })
+        .withFailureHandler(err => {
+          btn.disabled = false;
+          setStatus('Błąd: ' + (err && err.message ? err.message : err), true);
+        })
+        .loadRecipe(selected.row);
+    });
 
     function refresh() {
-      msg(''); warn('');
-      google.script.run.withSuccessHandler(res => {
-        entries = res.entries;
-        render();
-        if (res.error) msg(res.error, 'err');
-      }).withFailureHandler(e => msg(e.message, 'err')).getEntries();
+      setStatus('Odświeżanie...');
+      google.script.run
+        .withSuccessHandler(res => {
+          entries = res.entries;
+          if (selected) selected = entries.find(e => e.label === selected.label) || null;
+          renderButton();
+          setStatus(res.error ? 'Błąd: ' + res.error : '', !!res.error);
+        })
+        .withFailureHandler(err => setStatus('Błąd: ' + (err && err.message ? err.message : err), true))
+        .getEntries();
     }
+    $('refresh').addEventListener('click', refresh);
 
-    function load() {
-      const row = Number($('entry').value);
-      if (!row) { msg('Wybierz pozycję z listy.', 'err'); return; }
-      $('load').disabled = true;
-      msg('Wczytywanie…'); warn('');
-      google.script.run.withSuccessHandler(res => {
-        $('load').disabled = false;
-        if (res.error) { msg(res.error, 'err'); return; }
-        let t = 'Wczytano ' + res.written + ' komponentów (wartości × ' + res.mass + ').';
-        if (res.added.length) t += '\nDodano na końcu (brak w kolumnie B): ' + res.added.join(', ');
-        msg(t, 'ok');
-        warn(res.warning);
-      }).withFailureHandler(e => { $('load').disabled = false; msg(e.message, 'err'); })
-        .loadRecipe(row);
-    }
-
+    renderButton();
     refresh();
   </script>
 </body>
