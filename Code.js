@@ -1,12 +1,11 @@
 // ---------------------------------------------------------------------------
 // RECEPTURY: a sidebar that loads ONE row of the SOURCE_SHEET ("Zapisane receptury") into the RECIPE_SHEET ("Receptura").
 //
-// Source sheet (headers in row 1): Produkt | Receptura | Asortyment | Receptura - skład | Masa
+// Source sheet (headers in row 1): Receptura | Produkt | Receptura - skład
 //   "Receptura - skład" = "[[component;value];[component;value];...]"  (one value per component)
-//   "Masa" = a factor; every value that goes into the destination is multiplied by it
-// The sidebar offers one dropdown (with a search field) with an entry per row: "Produkt (Receptura / Asortyment)". Entries
-// with the same label are shown once; the FIRST row is loaded, and a warning is returned if the rows with that label hold
-// more than one distinct "Receptura - skład".
+// The sidebar offers one dropdown (with a search field) with an entry per row: "Produkt (Receptura)". Entries with the same
+// label are shown once; the FIRST row is loaded, and a warning is returned if the rows with that label hold more than one
+// distinct "Receptura - skład".
 //
 // Destination: components (keys) sit in column B from row 4 down. The value of each component goes to column D of the
 // row whose B matches it. A component that is not in column B is added in the first empty row below the data range.
@@ -16,9 +15,7 @@ const SOURCE_SHEET = 'Zapisane receptury';
 const RECIPE_SHEET = 'Receptura';
 const PRODUCT_COLUMN = 'Produkt';
 const RECIPE_NAME_COLUMN = 'Receptura';
-const ASSORT_COLUMN = 'Asortyment';
 const RECIPE_COLUMN = 'Receptura - skład';
-const MASS_COLUMN = 'Masa';
 const KEY_COL = 2;          // B
 const VALUE_COL = 4;        // D
 const FIRST_ROW = 4;
@@ -42,24 +39,23 @@ function toNumber_(v) {
   return t === '' ? NaN : Number(t);
 }
 
-/** The source sheet as rows: [{ row (sheet row number), label, text (Receptura - skład), mass (number or NaN) }]; throws a Polish message. */
+/** The source sheet as rows: [{ row (sheet row number), label, text (Receptura - skład) }]; throws a Polish message. */
 function readSource_() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SOURCE_SHEET);
   if (!sheet) throw new Error('Brak arkusza "' + SOURCE_SHEET + '".');
   const all = sheet.getDataRange().getValues();
   const head = all[0].map(h => String(h).trim());
   const idx = {};
-  [PRODUCT_COLUMN, RECIPE_NAME_COLUMN, ASSORT_COLUMN, RECIPE_COLUMN, MASS_COLUMN].forEach(h => {
+  [PRODUCT_COLUMN, RECIPE_NAME_COLUMN, RECIPE_COLUMN].forEach(h => {
     idx[h] = head.indexOf(h);
     if (idx[h] < 0) throw new Error('Brak kolumny "' + h + '" w arkuszu "' + SOURCE_SHEET + '".');
   });
   const cell = (r, h) => String(r[idx[h]] === null || r[idx[h]] === undefined ? '' : r[idx[h]]).trim();
   const rows = [];
   all.slice(1).forEach((r, i) => {
-    const product = cell(r, PRODUCT_COLUMN), recipe = cell(r, RECIPE_NAME_COLUMN), assort = cell(r, ASSORT_COLUMN);
-    if (!product && !recipe && !assort) return;
-    rows.push({ row: i + 2, label: product + ' (' + recipe + ' / ' + assort + ')', text: cell(r, RECIPE_COLUMN),
-                mass: toNumber_(r[idx[MASS_COLUMN]]) });
+    const product = cell(r, PRODUCT_COLUMN), recipe = cell(r, RECIPE_NAME_COLUMN);
+    if (!product && !recipe) return;
+    rows.push({ row: i + 2, label: product + ' (' + recipe + ')', text: cell(r, RECIPE_COLUMN) });
   });
   return rows;
 }
@@ -100,23 +96,19 @@ function getEntries() {
 }
 
 /**
- * Loads the source row `row` (the first one of its label) into the destination sheet, every value multiplied by its Masa.
- * Returns { ok, written, added, mass, warning } | { error }.
+ * Loads the source row `row` (the first one of its label) into the destination sheet.
+ * Returns { ok, written, added, warning } | { error }.
  */
 function loadRecipe(row) {
   try {
     const rows = readSource_();
     const chosen = rows.filter(r => r.row === row)[0];
     if (!chosen) return { error: 'Nie znaleziono wybranej pozycji – odśwież listę.' };
-    if (!Number.isFinite(chosen.mass)) return { error: 'Brak poprawnej wartości "' + MASS_COLUMN + '" dla "' + chosen.label + '" – nic nie zmieniono.' };
 
     const same = rows.filter(r => r.label === chosen.label);
     const distinct = same.map(r => r.text).filter((t, i, a) => a.indexOf(t) === i);
     const components = parseRecipe_(chosen.text);
     if (!components.length) return { error: 'Brak odczytywalnego składu dla "' + chosen.label + '".' };
-
-    const notNumeric = components.filter(c => c.value !== '' && typeof c.value !== 'number').map(c => c.name);
-    if (notNumeric.length) return { error: 'Wartości nie są liczbami (nie da się pomnożyć przez ' + MASS_COLUMN + '): ' + notNumeric.join(', ') + '. Nic nie zmieniono.' };
 
     const warning = distinct.length > 1
       ? 'Znaleziono ' + distinct.length + ' różnych pozycji "' + RECIPE_COLUMN + '" dla "' + chosen.label + '" – wczytano pierwszą.'
@@ -146,11 +138,11 @@ function loadRecipe(row) {
         added.push(c.name);
         sheet.getRange(target, KEY_COL).setValue(c.name);
       }
-      writes.push([target, c.value === '' ? '' : c.value * chosen.mass]);
+      writes.push([target, c.value]);
     });
     writes.forEach(w => sheet.getRange(w[0], VALUE_COL).setValue(w[1]));
     SpreadsheetApp.flush();
-    return { ok: true, written: writes.length, added: added, mass: chosen.mass, warning: warning };
+    return { ok: true, written: writes.length, added: added, warning: warning };
   } catch (e) {
     return { error: e.message };
   }
