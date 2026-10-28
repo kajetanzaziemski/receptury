@@ -6,103 +6,105 @@
   <style>
     body { font-family: Arial, sans-serif; font-size: 13px; margin: 0; padding: 12px; }
     h3 { margin: 0 0 8px; font-size: 15px; }
+    h4 { margin: 12px 0 4px; font-size: 13px; }
+    label.r { display: block; padding: 2px 0; }
     input[type=text] { width: 100%; box-sizing: border-box; padding: 6px; margin-bottom: 6px; }
-    #list { border: 1px solid #ccc; max-height: 55vh; overflow-y: auto; }
-    .item { display: flex; align-items: center; padding: 4px 6px; border-bottom: 1px solid #eee; cursor: pointer; }
-    .item:hover { background: #f3f6fb; }
-    .item input { margin-right: 6px; }
-    .item .n { margin-left: auto; color: #888; font-size: 11px; }
-    .item.bad { color: #b00020; }
-    .row { margin: 8px 0; }
+    select { width: 100%; box-sizing: border-box; }
+    .row { margin: 10px 0; }
     button { padding: 6px 10px; cursor: pointer; }
     button.primary { background: #1a73e8; color: #fff; border: 0; border-radius: 3px; }
     button:disabled { opacity: .5; cursor: default; }
     #msg { margin-top: 8px; white-space: pre-wrap; }
     #msg.err { color: #b00020; }
     #msg.ok { color: #137333; }
+    #warn { margin-top: 8px; white-space: pre-wrap; background: #fff4ce; border: 1px solid #e0b100; padding: 6px; display: none; }
   </style>
 </head>
 <body>
   <h3>Receptury</h3>
-  <input type="text" id="filter" placeholder="Szukaj asortymentu…" oninput="render()">
-  <div class="row">
-    <button onclick="selectVisible(true)">Zaznacz widoczne</button>
-    <button onclick="selectVisible(false)">Odznacz</button>
-    <button onclick="refresh()">Odśwież listę</button>
-  </div>
-  <div id="list">Wczytywanie…</div>
-  <div class="row"><label><input type="checkbox" id="append"> Dopisz pod istniejącymi (zamiast zastąpić)</label></div>
-  <div class="row"><button class="primary" id="load" onclick="load()">Wczytaj recepturę</button> <span id="count"></span></div>
+
+  <h4>1. Wybierz identyfikator</h4>
+  <div id="ids"></div>
+
+  <h4>2. Wybierz wartość</h4>
+  <input type="text" id="filter" placeholder="Szukaj…" oninput="renderValues()">
+  <select id="values" size="12"></select>
+
+  <div class="row"><button class="primary" id="load" onclick="load()">Wczytaj</button></div>
+  <div id="warn"></div>
   <div id="msg"></div>
 
   <script>
-    let items = [];
-    const selected = new Set();
+    let column = '';
+    let values = [];
     const $ = id => document.getElementById(id);
 
     function msg(text, cls) { const m = $('msg'); m.textContent = text || ''; m.className = cls || ''; }
+    function warn(text) { const w = $('warn'); w.textContent = text || ''; w.style.display = text ? 'block' : 'none'; }
 
-    function refresh() {
-      msg('');
-      $('list').textContent = 'Wczytywanie…';
+    function init() {
+      google.script.run.withSuccessHandler(cols => {
+        const box = $('ids');
+        cols.forEach((c, i) => {
+          const l = document.createElement('label');
+          l.className = 'r';
+          const r = document.createElement('input');
+          r.type = 'radio'; r.name = 'col'; r.value = c; r.checked = i === 0;
+          r.onchange = () => pick(c);
+          l.append(r, ' ' + c);
+          box.appendChild(l);
+        });
+        pick(cols[0]);
+      }).withFailureHandler(e => msg(e.message, 'err')).getIdColumns();
+    }
+
+    function pick(c) {
+      column = c;
+      values = [];
+      $('filter').value = '';
+      renderValues();
+      msg('Wczytywanie…');
+      warn('');
       google.script.run.withSuccessHandler(res => {
-        if (res.error) { items = []; $('list').textContent = ''; msg(res.error, 'err'); }
-        else items = res.items;
-        const keys = new Set(items.map(i => i.key));
-        [...selected].forEach(k => { if (!keys.has(k)) selected.delete(k); });
-        render();
-      }).withFailureHandler(e => msg(e.message, 'err')).getAssortmentKeys();
+        if (res.error) { msg(res.error, 'err'); return; }
+        if (c !== column) return;       // a later pick won the race
+        msg('');
+        values = res.values;
+        renderValues();
+      }).withFailureHandler(e => msg(e.message, 'err')).getUniqueValues(c);
     }
 
-    function visible() {
+    function renderValues() {
       const q = $('filter').value.trim().toLowerCase();
-      return items.filter(i => !q || i.key.toLowerCase().indexOf(q) >= 0);
-    }
-
-    function render() {
-      const list = $('list');
-      list.textContent = '';
-      visible().forEach(i => {
-        const d = document.createElement('div');
-        d.className = 'item' + (i.error ? ' bad' : '');
-        const cb = document.createElement('input');
-        cb.type = 'checkbox';
-        cb.checked = selected.has(i.key);
-        cb.onclick = e => e.stopPropagation();
-        cb.onchange = () => toggle(i.key, cb.checked);
-        const label = document.createElement('span');
-        label.textContent = i.key;
-        const n = document.createElement('span');
-        n.className = 'n';
-        n.textContent = i.error ? 'błąd' : (i.count ? i.count + ' komp.' : 'brak');
-        if (i.error) d.title = i.error;
-        d.onclick = () => { cb.checked = !cb.checked; toggle(i.key, cb.checked); };
-        d.append(cb, label, n);
-        list.appendChild(d);
+      const sel = $('values');
+      const prev = sel.value;
+      sel.textContent = '';
+      values.filter(v => !q || v.toLowerCase().indexOf(q) >= 0).forEach(v => {
+        const o = document.createElement('option');
+        o.value = v; o.textContent = v;
+        if (v === prev) o.selected = true;
+        sel.appendChild(o);
       });
-      updateCount();
     }
-
-    function toggle(key, on) { if (on) selected.add(key); else selected.delete(key); updateCount(); }
-    function selectVisible(on) { visible().forEach(i => on ? selected.add(i.key) : selected.delete(i.key)); render(); }
-    function updateCount() { $('count').textContent = 'Wybrano: ' + selected.size; }
 
     function load() {
-      if (!selected.size) { msg('Zaznacz co najmniej jeden asortyment.', 'err'); return; }
-      const order = items.map(i => i.key).filter(k => selected.has(k));   // keep the order of the sheet
+      const v = $('values').value;
+      if (!v) { msg('Wybierz wartość z listy.', 'err'); return; }
       $('load').disabled = true;
       msg('Wczytywanie…');
+      warn('');
       google.script.run.withSuccessHandler(res => {
         $('load').disabled = false;
         if (res.error) { msg(res.error, 'err'); return; }
-        let t = 'Wczytano ' + res.rows + ' wierszy dla ' + res.loaded + ' asortymentów.';
-        if (res.empty.length) t += '\nBez receptury: ' + res.empty.join(', ');
+        let t = 'Wczytano ' + res.written + ' komponentów.';
+        if (res.added.length) t += '\nDodano na końcu (brak w kolumnie B): ' + res.added.join(', ');
         msg(t, 'ok');
+        warn(res.warning);
       }).withFailureHandler(e => { $('load').disabled = false; msg(e.message, 'err'); })
-        .loadRecipes(order, $('append').checked);
+        .loadRecipe(column, v);
     }
 
-    refresh();
+    init();
   </script>
 </body>
 </html>

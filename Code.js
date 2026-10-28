@@ -1,16 +1,22 @@
 // ---------------------------------------------------------------------------
-// RECEPTURY: a sidebar that lists the keys of the "Asortyment" column of the ASSORT_SHEET sheet (a copy of the
-// "Gotowe asortymenty" sheet from the wyceny project) and loads the matching "Receptura" cells into RECIPE_SHEET.
+// RECEPTURY: a sidebar that loads ONE row of the SOURCE_SHEET ("Zapisane receptury") into the RECIPE_SHEET ("Receptura").
 //
-// Source sheet: a row whose column A is "Asortyment" holds the section titles, the next row the element headers,
-// data rows follow (A = key). The "Receptura" column (section row, else header row) holds
-//   "[[name1,pricePerKg1,price1];[name2,pricePerKg2,price2];...]"
-// Destination sheet: one row per component:  Asortyment | Komponent | Cena za kg | Cena
+// Source sheet (headers in row 1): Produkt | Receptura | Asortyment | Receptura - skład
+//   "Receptura - skład" = "[[component;value];[component;value];...]"  (one value per component)
+// The user picks an identifier column (Produkt / Receptura / Asortyment), then one of its unique values; the FIRST row
+// with that value is loaded. If the rows with that value hold more than one distinct "Receptura - skład", a warning is returned.
+//
+// Destination: components (keys) sit in column B from row 4 down. The value of each component goes to column D of the
+// row whose B matches it. A component that is not in column B is added in the first empty row below the data range.
 // ---------------------------------------------------------------------------
 
-const ASSORT_SHEET = 'Gotowe asortymenty';
+const SOURCE_SHEET = 'Zapisane receptury';
 const RECIPE_SHEET = 'Receptura';
-const RECIPE_HEADERS = ['Asortyment', 'Komponent', 'Cena za kg', 'Cena'];
+const ID_COLUMNS = ['Receptura', 'Produkt', 'Asortyment'];   // first = the default in the sidebar
+const RECIPE_COLUMN = 'Receptura - skład';
+const KEY_COL = 2;          // B
+const VALUE_COL = 4;        // D
+const FIRST_ROW = 4;
 
 function onOpen() {
   SpreadsheetApp.getUi()
@@ -24,112 +30,107 @@ function showSidebar() {
   SpreadsheetApp.getUi().showSidebar(html);
 }
 
+/** The source sheet: { values (rows under the header), idx: {header: column index} }; throws a Polish message. */
+function readSource_() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SOURCE_SHEET);
+  if (!sheet) throw new Error('Brak arkusza "' + SOURCE_SHEET + '".');
+  const all = sheet.getDataRange().getValues();
+  const head = all[0].map(h => String(h).trim());
+  const idx = {};
+  ID_COLUMNS.concat([RECIPE_COLUMN]).forEach(h => {
+    idx[h] = head.indexOf(h);
+    if (idx[h] < 0) throw new Error('Brak kolumny "' + h + '" w arkuszu "' + SOURCE_SHEET + '".');
+  });
+  return { values: all.slice(1), idx: idx };
+}
+
 /**
- * "Receptura" cell -> { components: [{name, pricePerKg, price}], error? }.
- * Fields are separated by commas, or by semicolons when a number has a decimal comma. The pair "[name;price]"
- * is accepted too (pricePerKg = 0). An empty cell gives no components.
+ * "[[name;value];[name;value]]" -> [{name, value}]. Inside an entry the fields are separated by semicolons, or by commas when
+ * there is no semicolon; the first field is the name, the last one the value (a number when it parses as one, else the text).
  */
 function parseRecipe_(text) {
   const raw = String(text === null || text === undefined ? '' : text).trim();
-  if (!raw) return { components: [] };
-
-  const num = s => {
-    const t = s.trim();
-    return t === '' ? 0 : Number(t.replace(/[\s ]/g, '').replace(',', '.'));
-  };
-  const components = [];
+  const out = [];
   const re = /\[([^\[\]]*)\]/g;                  // innermost brackets = one entry each
   let m;
   while ((m = re.exec(raw)) !== null) {
     const fields = m[1].indexOf(';') >= 0 ? m[1].split(';') : m[1].split(',');
     const name = (fields[0] || '').trim();
     if (!name) continue;
-    if (fields.length !== 2 && fields.length !== 3) {
-      return { components: [], error: 'Nieprawidłowy komponent „' + name + '” (oczekiwano: nazwa, cena za kg, cena).' };
-    }
-    const pricePerKg = fields.length === 3 ? num(fields[1]) : 0;
-    const price = num(fields[fields.length - 1]);
-    if (!Number.isFinite(pricePerKg) || !Number.isFinite(price)) {
-      return { components: [], error: 'Nieprawidłowa cena komponentu „' + name + '”.' };
-    }
-    components.push({ name: name, pricePerKg: pricePerKg, price: price });
+    const v = fields.length > 1 ? fields[fields.length - 1].trim() : '';
+    const n = Number(v.replace(/[\s ]/g, '').replace(',', '.'));
+    out.push({ name: name, value: v === '' ? '' : (Number.isFinite(n) ? n : v) });
   }
-  if (!components.length) return { components: [], error: 'Nie udało się odczytać pola Receptura.' };
-  return { components: components };
+  return out;
 }
 
-/** The source sheet as { key: {row, components, error} } in sheet order; throws a Polish message on a bad layout. */
-function readAssortments_() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(ASSORT_SHEET);
-  if (!sheet) throw new Error('Brak arkusza "' + ASSORT_SHEET + '".');
+/** For the sidebar: the identifier columns offered, the first being the default. */
+function getIdColumns() { return ID_COLUMNS; }
 
-  const values = sheet.getDataRange().getValues();
-  const secIdx = values.findIndex(r => String(r[0]).trim() === 'Asortyment');
-  if (secIdx < 0 || secIdx + 1 >= values.length) {
-    throw new Error('Nie znaleziono nagłówka "Asortyment" w arkuszu "' + ASSORT_SHEET + '".');
-  }
-  const sec = values[secIdx], head = values[secIdx + 1];
-  const keyIdx = sec.findIndex(v => String(v).trim() === 'Asortyment');
-  let recipeIdx = sec.findIndex(v => String(v).trim() === 'Receptura');
-  if (recipeIdx < 0) recipeIdx = head.findIndex(v => String(v).trim() === 'Receptura');
-  if (recipeIdx < 0) throw new Error('Brak kolumny "Receptura" w arkuszu "' + ASSORT_SHEET + '".');
-
-  const items = [];
-  for (let r = secIdx + 2; r < values.length; r++) {
-    const key = String(values[r][keyIdx]).trim();
-    if (!key) continue;
-    const recipe = parseRecipe_(values[r][recipeIdx]);
-    items.push({ key: key, row: r + 1, components: recipe.components, error: recipe.error || '' });
-  }
-  return items;
-}
-
-/** For the sidebar: { items: [{key, count, error}] } | { items: [], error }. Never throws. */
-function getAssortmentKeys() {
+/** Unique non-empty values of one identifier column, in sheet order: { values } | { values: [], error }. Never throws. */
+function getUniqueValues(column) {
   try {
-    return {
-      items: readAssortments_().map(i => ({ key: i.key, count: i.components.length, error: i.error }))
-    };
+    if (ID_COLUMNS.indexOf(column) < 0) return { values: [], error: 'Nieznana kolumna: ' + column };
+    const src = readSource_();
+    const seen = {}, values = [];
+    src.values.forEach(r => {
+      const v = String(r[src.idx[column]]).trim();
+      if (v && !seen[v]) { seen[v] = true; values.push(v); }
+    });
+    return { values: values };
   } catch (e) {
-    return { items: [], error: e.message };
+    return { values: [], error: e.message };
   }
 }
 
 /**
- * Loads the receptury of `keys` into RECIPE_SHEET (created if missing). `append` = add under the existing rows,
- * otherwise the rows under the header are replaced. Checks everything first: on any problem nothing is changed.
- * Returns { ok, rows, loaded, empty } | { error }.
+ * Loads the first source row whose `column` equals `value` into the destination sheet.
+ * Returns { ok, written, added, missingNames, warning? } | { error }.
  */
-function loadRecipes(keys, append) {
+function loadRecipe(column, value) {
   try {
-    if (!keys || !keys.length) return { error: 'Nie wybrano żadnego asortymentu.' };
-    const byKey = {};
-    readAssortments_().forEach(i => { if (!(i.key in byKey)) byKey[i.key] = i; });
+    if (ID_COLUMNS.indexOf(column) < 0) return { error: 'Nieznana kolumna: ' + column };
+    const src = readSource_();
+    const matches = src.values.filter(r => String(r[src.idx[column]]).trim() === value);
+    if (!matches.length) return { error: 'Nie znaleziono "' + value + '" w kolumnie "' + column + '".' };
 
-    const problems = [], rows = [], empty = [];
-    keys.forEach(k => {
-      const item = byKey[k];
-      if (!item) { problems.push(k + ': nie znaleziono asortymentu'); return; }
-      if (item.error) { problems.push(k + ': ' + item.error); return; }
-      if (!item.components.length) { empty.push(k); return; }
-      item.components.forEach(c => rows.push([k, c.name, c.pricePerKg, c.price]));
+    const texts = matches.map(r => String(r[src.idx[RECIPE_COLUMN]]).trim());
+    const distinct = texts.filter((t, i) => texts.indexOf(t) === i);
+    const components = parseRecipe_(texts[0]);
+    if (!components.length) return { error: 'Brak odczytywalnego składu w pierwszym dopasowaniu dla "' + value + '".' };
+    const warning = distinct.length > 1
+      ? 'Znaleziono ' + distinct.length + ' różnych pozycji "' + RECIPE_COLUMN + '" dla "' + value + '" – wczytano pierwszą.'
+      : '';
+
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(RECIPE_SHEET);
+    if (!sheet) return { error: 'Brak arkusza "' + RECIPE_SHEET + '".' };
+
+    // rows of the existing components (column B from FIRST_ROW down); the data range tells where the free rows start
+    const last = Math.max(sheet.getDataRange().getLastRow(), FIRST_ROW - 1);
+    const keys = last >= FIRST_ROW ? sheet.getRange(FIRST_ROW, KEY_COL, last - FIRST_ROW + 1, 1).getValues() : [];
+    const rowOf = {};
+    keys.forEach((r, i) => {
+      const k = String(r[0]).trim().toLowerCase();
+      if (k && !(k in rowOf)) rowOf[k] = FIRST_ROW + i;
     });
-    if (problems.length) return { error: 'Nic nie zmieniono. ' + problems.join(' | ') };
-    if (!rows.length) return { error: 'Wybrane asortymenty nie mają receptury.' };
 
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const sheet = ss.getSheetByName(RECIPE_SHEET) || ss.insertSheet(RECIPE_SHEET);
-    sheet.getRange(1, 1, 1, RECIPE_HEADERS.length).setValues([RECIPE_HEADERS]).setFontWeight('bold');
-    sheet.setFrozenRows(1);
-
-    if (!append) {
-      const last = sheet.getLastRow();
-      if (last > 1) sheet.getRange(2, 1, last - 1, Math.max(sheet.getLastColumn(), RECIPE_HEADERS.length)).clearContent();
-    }
-    const start = append ? Math.max(sheet.getLastRow(), 1) + 1 : 2;
-    sheet.getRange(start, 1, rows.length, RECIPE_HEADERS.length).setValues(rows);
+    let next = last + 1;
+    const added = [];
+    const writes = [];
+    components.forEach(c => {
+      const k = c.name.toLowerCase();
+      let row = rowOf[k];
+      if (row === undefined) {
+        row = next++;
+        rowOf[k] = row;
+        added.push(c.name);
+        sheet.getRange(row, KEY_COL).setValue(c.name);
+      }
+      writes.push([row, c.value]);
+    });
+    writes.forEach(w => sheet.getRange(w[0], VALUE_COL).setValue(w[1]));
     SpreadsheetApp.flush();
-    return { ok: true, rows: rows.length, loaded: keys.length - empty.length, empty: empty };
+    return { ok: true, written: writes.length, added: added, warning: warning };
   } catch (e) {
     return { error: e.message };
   }
