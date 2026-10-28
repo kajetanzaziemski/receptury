@@ -13,7 +13,8 @@
 // A code that is not found there is loaded as it is and reported in the warning.
 //
 // Destination: every component is appended below the data range (never below FIRST_ROW), the menu position in column B and
-// its value in column D. Nothing is merged with what is already there, so duplicates are possible.
+// its value in column D. Nothing is merged with what is already there, so duplicates are possible. B1 gets the Receptura name
+// and B2 the Produkt in parentheses, but only when the cell is empty or holds just "-".
 //
 // Formatting of the destination (formatRecipeSheet_, on every edit of column B and after every load): from FIRST_ROW to the last
 // row with data in column B + 1, column B gets the data validation of VALIDATION_CELL (B4) where a cell has none, and B:G get
@@ -33,8 +34,10 @@ const VALUE_COL = 4;        // D
 const LAST_FORMAT_COL = 7;  // G
 const FIRST_ROW = 5;
 const VALIDATION_CELL = 'B4';
+const RECIPE_NAME_CELL = 'B1';
+const PRODUCT_CELL = 'B2';
 const ROW_WHITE = '#ffffff';
-const ROW_GREY = '#e6e6e6'; // 10 % grey
+const ROW_GREY = '#f3f3f3';
 
 function onOpen() {
   SpreadsheetApp.getUi()
@@ -100,6 +103,14 @@ function formatRecipeSheet_(sheet) {
   sheet.getRange(FIRST_ROW, KEY_COL, count, LAST_FORMAT_COL - KEY_COL + 1).setBackgrounds(colors);
 }
 
+/** Puts `text` into the cell only when it is empty or holds just "-" (and there is something to put). */
+function fillIfBlank_(sheet, a1, text) {
+  if (!text) return;
+  const cell = sheet.getRange(a1);
+  const cur = String(cell.getValue()).trim();
+  if (cur === '' || cur === '-') cell.setValue(text);
+}
+
 /** A number from a cell (a decimal comma and spaces are fine); NaN when empty or not a number. */
 function toNumber_(v) {
   if (typeof v === 'number') return v;
@@ -107,7 +118,7 @@ function toNumber_(v) {
   return t === '' ? NaN : Number(t);
 }
 
-/** The source sheet as rows: [{ row (sheet row number), label, text (Receptura - skład) }]; throws a Polish message. */
+/** The source sheet as rows: [{ row (sheet row number), label, recipe, product, text (Receptura - skład) }]; throws a Polish message. */
 function readSource_() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SOURCE_SHEET);
   if (!sheet) throw new Error('Brak arkusza "' + SOURCE_SHEET + '".');
@@ -123,7 +134,7 @@ function readSource_() {
   all.slice(1).forEach((r, i) => {
     const product = cell(r, PRODUCT_COLUMN), recipe = cell(r, RECIPE_NAME_COLUMN);
     if (!product && !recipe) return;
-    rows.push({ row: i + 2, label: product + ' (' + recipe + ')', text: cell(r, RECIPE_COLUMN) });
+    rows.push({ row: i + 2, label: product + ' (' + recipe + ')', recipe: recipe, product: product, text: cell(r, RECIPE_COLUMN) });
   });
   return rows;
 }
@@ -220,6 +231,9 @@ function loadRecipe(row) {
     const start = Math.max(sheet.getDataRange().getLastRow() + 1, FIRST_ROW);
     sheet.getRange(start, KEY_COL, components.length, 1).setValues(components.map(c => [c.name]));
     sheet.getRange(start, VALUE_COL, components.length, 1).setValues(components.map(c => [c.value]));
+
+    fillIfBlank_(sheet, RECIPE_NAME_CELL, chosen.recipe);
+    fillIfBlank_(sheet, PRODUCT_CELL, chosen.product ? '(' + chosen.product + ')' : '');
 
     formatRecipeSheet_(sheet);       // a script write does not fire onEdit
 

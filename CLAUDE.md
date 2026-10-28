@@ -18,7 +18,7 @@ The sidebar lists one dropdown entry per row, labelled `Produkt (Receptura)`. Sa
 A code from `Receptura - skład` is translated to the `Pozycja menu` of its FIRST row here, and that is what lands in `Receptura!B`. A code with no menu position is loaded as it is and reported in the sidebar warning.
 
 ### `Receptura` (destination)
-The header block is in `C1:G4`; columns A and B hold the entry list. Do not overwrite anything in rows 1–4.
+The header block is in `C1:G4`; columns A and B hold the entry list. Do not overwrite anything in rows 1–4, except the two title cells below.
 
 | | C | D | E | F | G |
 |---|---|---|---|---|---|
@@ -27,6 +27,7 @@ The header block is in `C1:G4`; columns A and B hold the entry list. Do not over
 | 3 | `=F3/D3` | `=SUM(D4:D)` | `=1-SUM(E4:E)` | `=SUM(F4:F)` | `=SUM(G4:G)` |
 | 4 | `=ArrayFormula(IF(B4:B<>"";XLOOKUP(B4:B;'Komponenty recepturowe'!C:C;'Komponenty recepturowe'!B:B;"???");))` | (empty) | `=ArrayFormula(IF(D4:D<>"";D4:D/D$3;))` | `=ArrayFormula(IF(D4:D<>"";D4:D*C4:C;))` | `=ArrayFormula(IF(F4:F<>"";F4:F/F$3;))` |
 
+- Cell **B1** = the recipe name (`Receptura`), cell **B2** = the product in parentheses, e.g. `(Kisiel)`. The loader writes them only when the cell is empty or holds just `-`; anything else is left alone.
 - Column **B** = component (a `Pozycja menu`), from row 4 down. `B4` carries a data validation (the template for the cells below).
 - Column **D** = the value (mass, kg) of that component, from row 4 down.
 - Columns **C, E, F, G** from row 4 down are spilled by the array formulas above: never write values there, or the spill breaks (`#REF!`).
@@ -37,13 +38,14 @@ The header block is in `C1:G4`; columns A and B hold the entry list. Do not over
 ### Loading (`loadRecipe`)
 - Appends the components of the chosen recipe below the destination's data range (`getDataRange().getLastRow() + 1`, never above `FIRST_ROW`, currently 5). Nothing is merged with existing entries, so duplicates are allowed on purpose.
 - Writes the `Pozycja menu` to column B and the value to column D only.
+- Fills `B1` (recipe name) and `B2` (`(product)`) if they are empty or `-` (`fillIfBlank_`).
 - Never multiplies values (an earlier `Masa` column was dropped from the source).
 - Then calls `formatRecipeSheet_`, because writes made by a script do not fire `onEdit`.
 
 ### Formatting (`formatRecipeSheet_`, run by the simple `onEdit` trigger and after loading)
 Triggered by an edit on `Receptura` that touches column B at row 5 or below. Range = row 5 down to the last row with data in column B, plus one.
 - Column B: every cell that has no data validation gets the one from `B4`. Existing validations are not verified or changed.
-- Columns B:G: alternating backgrounds, first row white (`#ffffff`), second grey (`#e6e6e6`, 10 %). No header is touched.
+- Columns B:G: alternating backgrounds, first row white (`#ffffff`), second grey (`#f3f3f3`). No header is touched.
 - Colours and columns are the constants `ROW_WHITE`, `ROW_GREY`, `LAST_FORMAT_COL` at the top of `Code.js`.
 - Rows left below the range keep whatever background they had (it is not cleared when the list shrinks).
 
