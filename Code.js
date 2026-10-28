@@ -1,5 +1,6 @@
 // ---------------------------------------------------------------------------
 // RECEPTURY: a sidebar that loads ONE row of the SOURCE_SHEET ("Zapisane receptury") into the RECIPE_SHEET ("Receptura").
+// The layout of the sheets is described in CLAUDE.md.
 //
 // Source sheet (headers in row 1): Receptura | Produkt | Receptura - skład
 //   "Receptura - skład" = "[[component code;value];[component code;value];...]"  (one value per component)
@@ -12,7 +13,8 @@
 // A code that is not found there is loaded as it is and reported in the warning.
 //
 // Destination: every component is appended below the data range (never below FIRST_ROW), the menu position in column B and
-// its value in column D. Nothing is merged with what is already there, so duplicates are possible.
+// its value in column D. Nothing is merged with what is already there, so duplicates are possible. The data validation of
+// VALIDATION_CELL (B4) is copied onto the new cells of column B.
 // ---------------------------------------------------------------------------
 
 const SOURCE_SHEET = 'Zapisane receptury';
@@ -26,6 +28,7 @@ const MENU_COLUMN = 'Pozycja menu';
 const KEY_COL = 2;          // B
 const VALUE_COL = 4;        // D
 const FIRST_ROW = 5;
+const VALIDATION_CELL = 'B4';
 
 function onOpen() {
   SpreadsheetApp.getUi()
@@ -157,8 +160,14 @@ function loadRecipe(row) {
 
     // the first empty row, as the data range tells, but never above FIRST_ROW
     const start = Math.max(sheet.getDataRange().getLastRow() + 1, FIRST_ROW);
-    sheet.getRange(start, KEY_COL, components.length, 1).setValues(components.map(c => [c.name]));
+    const keyRange = sheet.getRange(start, KEY_COL, components.length, 1);
+    keyRange.setValues(components.map(c => [c.name]));
     sheet.getRange(start, VALUE_COL, components.length, 1).setValues(components.map(c => [c.value]));
+
+    // the same data validation as the template cell (none there = nothing to copy)
+    const rule = sheet.getRange(VALIDATION_CELL).getDataValidation();
+    if (rule) keyRange.setDataValidation(rule);
+
     SpreadsheetApp.flush();
     return { ok: true, written: components.length, warning: warnings.join('\n') };
   } catch (e) {
