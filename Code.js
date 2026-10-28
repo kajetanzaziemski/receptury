@@ -11,8 +11,8 @@
 // to "Pozycja menu"; the FIRST row with the code gives the menu position, which is what goes into the destination.
 // A code that is not found there is loaded as it is and reported in the warning.
 //
-// Destination: menu positions (keys) sit in column B from row 4 down. The value of each goes to column D of the row whose
-// B matches it. A position that is not in column B is added in the first empty row below the data range.
+// Destination: every component is appended below the data range (never below FIRST_ROW), the menu position in column B and
+// its value in column D. Nothing is merged with what is already there, so duplicates are possible.
 // ---------------------------------------------------------------------------
 
 const SOURCE_SHEET = 'Zapisane receptury';
@@ -25,7 +25,7 @@ const CODE_COLUMN = 'Kod komponentu';
 const MENU_COLUMN = 'Pozycja menu';
 const KEY_COL = 2;          // B
 const VALUE_COL = 4;        // D
-const FIRST_ROW = 4;
+const FIRST_ROW = 5;
 
 function onOpen() {
   SpreadsheetApp.getUi()
@@ -121,8 +121,8 @@ function getEntries() {
 }
 
 /**
- * Loads the source row `row` (the first one of its label) into the destination sheet.
- * Returns { ok, written, added, warning } | { error }.
+ * Loads the source row `row` (the first one of its label) below the data range of the destination sheet.
+ * Returns { ok, written, warning } | { error }.
  */
 function loadRecipe(row) {
   try {
@@ -155,32 +155,12 @@ function loadRecipe(row) {
     const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(RECIPE_SHEET);
     if (!sheet) return { error: 'Brak arkusza "' + RECIPE_SHEET + '".' };
 
-    // rows of the existing positions (column B from FIRST_ROW down); the data range tells where the free rows start
-    const last = Math.max(sheet.getDataRange().getLastRow(), FIRST_ROW - 1);
-    const keys = last >= FIRST_ROW ? sheet.getRange(FIRST_ROW, KEY_COL, last - FIRST_ROW + 1, 1).getValues() : [];
-    const rowOf = {};
-    keys.forEach((r, i) => {
-      const k = String(r[0]).trim().toLowerCase();
-      if (k && !(k in rowOf)) rowOf[k] = FIRST_ROW + i;
-    });
-
-    let next = last + 1;
-    const added = [];
-    const writes = [];
-    components.forEach(c => {
-      const k = c.name.toLowerCase();
-      let target = rowOf[k];
-      if (target === undefined) {
-        target = next++;
-        rowOf[k] = target;
-        added.push(c.name);
-        sheet.getRange(target, KEY_COL).setValue(c.name);
-      }
-      writes.push([target, c.value]);
-    });
-    writes.forEach(w => sheet.getRange(w[0], VALUE_COL).setValue(w[1]));
+    // the first empty row, as the data range tells, but never above FIRST_ROW
+    const start = Math.max(sheet.getDataRange().getLastRow() + 1, FIRST_ROW);
+    sheet.getRange(start, KEY_COL, components.length, 1).setValues(components.map(c => [c.name]));
+    sheet.getRange(start, VALUE_COL, components.length, 1).setValues(components.map(c => [c.value]));
     SpreadsheetApp.flush();
-    return { ok: true, written: writes.length, added: added, warning: warnings.join('\n') };
+    return { ok: true, written: components.length, warning: warnings.join('\n') };
   } catch (e) {
     return { error: e.message };
   }

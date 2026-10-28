@@ -172,9 +172,7 @@
         .withSuccessHandler(res => {
           btn.disabled = false;
           if (res.error) { setStatus(res.error, true); return; }
-          let t = 'Wczytano ' + res.written + ' komponentów.';
-          if (res.added.length) t += '\nDodano na końcu (brak w kolumnie B): ' + res.added.join(', ');
-          setStatus(t);
+          setStatus('Wczytano ' + res.written + ' komponentów.');
           setWarn(res.warning);
         })
         .withFailureHandler(err => {
