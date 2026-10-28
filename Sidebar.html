@@ -6,10 +6,8 @@
   <style>
     body { font-family: Arial, sans-serif; font-size: 13px; margin: 0; padding: 12px; }
     h3 { margin: 0 0 8px; font-size: 15px; }
-    h4 { margin: 12px 0 4px; font-size: 13px; }
-    label.r { display: block; padding: 2px 0; }
-    input[type=text] { width: 100%; box-sizing: border-box; padding: 6px; margin-bottom: 6px; }
-    select { width: 100%; box-sizing: border-box; }
+    label { display: block; margin-bottom: 4px; }
+    select { width: 100%; box-sizing: border-box; padding: 6px; }
     .row { margin: 10px 0; }
     button { padding: 6px 10px; cursor: pointer; }
     button.primary { background: #1a73e8; color: #fff; border: 0; border-radius: 3px; }
@@ -23,76 +21,46 @@
 <body>
   <h3>Receptury</h3>
 
-  <h4>1. Wybierz identyfikator</h4>
-  <div id="ids"></div>
+  <label for="entry">Produkt (Receptura / Asortyment)</label>
+  <select id="entry"><option value="">Wczytywanie…</option></select>
 
-  <h4>2. Wybierz wartość</h4>
-  <input type="text" id="filter" placeholder="Szukaj…" oninput="renderValues()">
-  <select id="values" size="12"></select>
-
-  <div class="row"><button class="primary" id="load" onclick="load()">Wczytaj</button></div>
+  <div class="row">
+    <button class="primary" id="load" onclick="load()">Wczytaj</button>
+    <button onclick="refresh()">Odśwież listę</button>
+  </div>
   <div id="warn"></div>
   <div id="msg"></div>
 
   <script>
-    let column = '';
-    let values = [];
     const $ = id => document.getElementById(id);
 
     function msg(text, cls) { const m = $('msg'); m.textContent = text || ''; m.className = cls || ''; }
     function warn(text) { const w = $('warn'); w.textContent = text || ''; w.style.display = text ? 'block' : 'none'; }
 
-    function init() {
-      google.script.run.withSuccessHandler(cols => {
-        const box = $('ids');
-        cols.forEach((c, i) => {
-          const l = document.createElement('label');
-          l.className = 'r';
-          const r = document.createElement('input');
-          r.type = 'radio'; r.name = 'col'; r.value = c; r.checked = i === 0;
-          r.onchange = () => pick(c);
-          l.append(r, ' ' + c);
-          box.appendChild(l);
-        });
-        pick(cols[0]);
-      }).withFailureHandler(e => msg(e.message, 'err')).getIdColumns();
-    }
-
-    function pick(c) {
-      column = c;
-      values = [];
-      $('filter').value = '';
-      renderValues();
-      msg('Wczytywanie…');
-      warn('');
+    function refresh() {
+      msg(''); warn('');
       google.script.run.withSuccessHandler(res => {
-        if (res.error) { msg(res.error, 'err'); return; }
-        if (c !== column) return;       // a later pick won the race
-        msg('');
-        values = res.values;
-        renderValues();
-      }).withFailureHandler(e => msg(e.message, 'err')).getUniqueValues(c);
-    }
-
-    function renderValues() {
-      const q = $('filter').value.trim().toLowerCase();
-      const sel = $('values');
-      const prev = sel.value;
-      sel.textContent = '';
-      values.filter(v => !q || v.toLowerCase().indexOf(q) >= 0).forEach(v => {
-        const o = document.createElement('option');
-        o.value = v; o.textContent = v;
-        if (v === prev) o.selected = true;
-        sel.appendChild(o);
-      });
+        const sel = $('entry');
+        const prev = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : '';
+        sel.textContent = '';
+        const first = document.createElement('option');
+        first.value = ''; first.textContent = '– wybierz –';
+        sel.appendChild(first);
+        res.entries.forEach(e => {
+          const o = document.createElement('option');
+          o.value = e.row; o.textContent = e.label;
+          if (e.label === prev) o.selected = true;
+          sel.appendChild(o);
+        });
+        if (res.error) msg(res.error, 'err');
+      }).withFailureHandler(e => msg(e.message, 'err')).getEntries();
     }
 
     function load() {
-      const v = $('values').value;
-      if (!v) { msg('Wybierz wartość z listy.', 'err'); return; }
+      const row = Number($('entry').value);
+      if (!row) { msg('Wybierz pozycję z listy.', 'err'); return; }
       $('load').disabled = true;
-      msg('Wczytywanie…');
-      warn('');
+      msg('Wczytywanie…'); warn('');
       google.script.run.withSuccessHandler(res => {
         $('load').disabled = false;
         if (res.error) { msg(res.error, 'err'); return; }
@@ -101,10 +69,10 @@
         msg(t, 'ok');
         warn(res.warning);
       }).withFailureHandler(e => { $('load').disabled = false; msg(e.message, 'err'); })
-        .loadRecipe(column, v);
+        .loadRecipe(row);
     }
 
-    init();
+    refresh();
   </script>
 </body>
 </html>
