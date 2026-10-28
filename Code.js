@@ -2,20 +2,27 @@
 // RECEPTURY: a sidebar that loads ONE row of the SOURCE_SHEET ("Zapisane receptury") into the RECIPE_SHEET ("Receptura").
 //
 // Source sheet (headers in row 1): Receptura | Produkt | Receptura - skład
-//   "Receptura - skład" = "[[component;value];[component;value];...]"  (one value per component)
+//   "Receptura - skład" = "[[component code;value];[component code;value];...]"  (one value per component)
 // The sidebar offers one dropdown (with a search field) with an entry per row: "Produkt (Receptura)". Entries with the same
 // label are shown once; the FIRST row is loaded, and a warning is returned if the rows with that label hold more than one
 // distinct "Receptura - skład".
 //
-// Destination: components (keys) sit in column B from row 4 down. The value of each component goes to column D of the
-// row whose B matches it. A component that is not in column B is added in the first empty row below the data range.
+// Component codes are translated first: COMPONENTS_SHEET ("Komponenty recepturowe", headers in row 1) maps "Kod komponentu"
+// to "Pozycja menu"; the FIRST row with the code gives the menu position, which is what goes into the destination.
+// A code that is not found there is loaded as it is and reported in the warning.
+//
+// Destination: menu positions (keys) sit in column B from row 4 down. The value of each goes to column D of the row whose
+// B matches it. A position that is not in column B is added in the first empty row below the data range.
 // ---------------------------------------------------------------------------
 
 const SOURCE_SHEET = 'Zapisane receptury';
 const RECIPE_SHEET = 'Receptura';
+const COMPONENTS_SHEET = 'Komponenty recepturowe';
 const PRODUCT_COLUMN = 'Produkt';
 const RECIPE_NAME_COLUMN = 'Receptura';
 const RECIPE_COLUMN = 'Receptura - skład';
+const CODE_COLUMN = 'Kod komponentu';
+const MENU_COLUMN = 'Pozycja menu';
 const KEY_COL = 2;          // B
 const VALUE_COL = 4;        // D
 const FIRST_ROW = 4;
@@ -58,6 +65,24 @@ function readSource_() {
     rows.push({ row: i + 2, label: product + ' (' + recipe + ')', text: cell(r, RECIPE_COLUMN) });
   });
   return rows;
+}
+
+/** { lowercased code: "Pozycja menu" } from COMPONENTS_SHEET, the first row of a code winning; throws a Polish message. */
+function readMenuPositions_() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(COMPONENTS_SHEET);
+  if (!sheet) throw new Error('Brak arkusza "' + COMPONENTS_SHEET + '".');
+  const all = sheet.getDataRange().getValues();
+  const head = all[0].map(h => String(h).trim());
+  const codeIdx = head.indexOf(CODE_COLUMN), menuIdx = head.indexOf(MENU_COLUMN);
+  if (codeIdx < 0) throw new Error('Brak kolumny "' + CODE_COLUMN + '" w arkuszu "' + COMPONENTS_SHEET + '".');
+  if (menuIdx < 0) throw new Error('Brak kolumny "' + MENU_COLUMN + '" w arkuszu "' + COMPONENTS_SHEET + '".');
+  const map = {};
+  all.slice(1).forEach(r => {
+    const code = String(r[codeIdx]).trim().toLowerCase();
+    const menu = String(r[menuIdx]).trim();
+    if (code && !(code in map)) map[code] = menu;
+  });
+  return map;
 }
 
 /**
@@ -110,14 +135,27 @@ function loadRecipe(row) {
     const components = parseRecipe_(chosen.text);
     if (!components.length) return { error: 'Brak odczytywalnego składu dla "' + chosen.label + '".' };
 
-    const warning = distinct.length > 1
-      ? 'Znaleziono ' + distinct.length + ' różnych pozycji "' + RECIPE_COLUMN + '" dla "' + chosen.label + '" – wczytano pierwszą.'
-      : '';
+    // codes -> menu positions (a code without a position stays as it is)
+    const menu = readMenuPositions_();
+    const unknown = [];
+    components.forEach(c => {
+      const found = menu[c.name.toLowerCase()];
+      if (found) c.name = found;
+      else unknown.push(c.name);
+    });
+
+    const warnings = [];
+    if (distinct.length > 1) {
+      warnings.push('Znaleziono ' + distinct.length + ' różnych pozycji "' + RECIPE_COLUMN + '" dla "' + chosen.label + '" – wczytano pierwszą.');
+    }
+    if (unknown.length) {
+      warnings.push('Brak "' + MENU_COLUMN + '" w arkuszu "' + COMPONENTS_SHEET + '" dla: ' + unknown.join(', ') + ' – wczytano kod komponentu.');
+    }
 
     const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(RECIPE_SHEET);
     if (!sheet) return { error: 'Brak arkusza "' + RECIPE_SHEET + '".' };
 
-    // rows of the existing components (column B from FIRST_ROW down); the data range tells where the free rows start
+    // rows of the existing positions (column B from FIRST_ROW down); the data range tells where the free rows start
     const last = Math.max(sheet.getDataRange().getLastRow(), FIRST_ROW - 1);
     const keys = last >= FIRST_ROW ? sheet.getRange(FIRST_ROW, KEY_COL, last - FIRST_ROW + 1, 1).getValues() : [];
     const rowOf = {};
@@ -142,7 +180,7 @@ function loadRecipe(row) {
     });
     writes.forEach(w => sheet.getRange(w[0], VALUE_COL).setValue(w[1]));
     SpreadsheetApp.flush();
-    return { ok: true, written: writes.length, added: added, warning: warning };
+    return { ok: true, written: writes.length, added: added, warning: warnings.join('\n') };
   } catch (e) {
     return { error: e.message };
   }
