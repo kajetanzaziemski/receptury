@@ -3,8 +3,9 @@
 //
 // Source sheet (headers in row 1): Produkt | Receptura | Asortyment | Receptura - skład
 //   "Receptura - skład" = "[[component;value];[component;value];...]"  (one value per component)
-// The user picks an identifier column (Produkt / Receptura / Asortyment), then one of its unique values; the FIRST row
-// with that value is loaded. If the rows with that value hold more than one distinct "Receptura - skład", a warning is returned.
+// The sidebar offers one dropdown with an entry per row: "Produkt (Receptura / Asortyment)". Entries with the same label are
+// shown once; the FIRST row is loaded, and a warning is returned if the rows with that label hold more than one distinct
+// "Receptura - skład".
 //
 // Destination: components (keys) sit in column B from row 4 down. The value of each component goes to column D of the
 // row whose B matches it. A component that is not in column B is added in the first empty row below the data range.
@@ -12,7 +13,9 @@
 
 const SOURCE_SHEET = 'Zapisane receptury';
 const RECIPE_SHEET = 'Receptura';
-const ID_COLUMNS = ['Receptura', 'Produkt', 'Asortyment'];   // first = the default in the sidebar
+const PRODUCT_COLUMN = 'Produkt';
+const RECIPE_NAME_COLUMN = 'Receptura';
+const ASSORT_COLUMN = 'Asortyment';
 const RECIPE_COLUMN = 'Receptura - skład';
 const KEY_COL = 2;          // B
 const VALUE_COL = 4;        // D
@@ -30,18 +33,25 @@ function showSidebar() {
   SpreadsheetApp.getUi().showSidebar(html);
 }
 
-/** The source sheet: { values (rows under the header), idx: {header: column index} }; throws a Polish message. */
+/** The source sheet as rows: [{ row (sheet row number), label, text (Receptura - skład) }]; throws a Polish message. */
 function readSource_() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SOURCE_SHEET);
   if (!sheet) throw new Error('Brak arkusza "' + SOURCE_SHEET + '".');
   const all = sheet.getDataRange().getValues();
   const head = all[0].map(h => String(h).trim());
   const idx = {};
-  ID_COLUMNS.concat([RECIPE_COLUMN]).forEach(h => {
+  [PRODUCT_COLUMN, RECIPE_NAME_COLUMN, ASSORT_COLUMN, RECIPE_COLUMN].forEach(h => {
     idx[h] = head.indexOf(h);
     if (idx[h] < 0) throw new Error('Brak kolumny "' + h + '" w arkuszu "' + SOURCE_SHEET + '".');
   });
-  return { values: all.slice(1), idx: idx };
+  const cell = (r, h) => String(r[idx[h]] === null || r[idx[h]] === undefined ? '' : r[idx[h]]).trim();
+  const rows = [];
+  all.slice(1).forEach((r, i) => {
+    const product = cell(r, PRODUCT_COLUMN), recipe = cell(r, RECIPE_NAME_COLUMN), assort = cell(r, ASSORT_COLUMN);
+    if (!product && !recipe && !assort) return;
+    rows.push({ row: i + 2, label: product + ' (' + recipe + ' / ' + assort + ')', text: cell(r, RECIPE_COLUMN) });
+  });
+  return rows;
 }
 
 /**
@@ -64,42 +74,37 @@ function parseRecipe_(text) {
   return out;
 }
 
-/** For the sidebar: the identifier columns offered, the first being the default. */
-function getIdColumns() { return ID_COLUMNS; }
-
-/** Unique non-empty values of one identifier column, in sheet order: { values } | { values: [], error }. Never throws. */
-function getUniqueValues(column) {
+/** For the sidebar: the dropdown entries, one per distinct label, in sheet order: { entries: [{row, label}] } | { entries: [], error }. Never throws. */
+function getEntries() {
   try {
-    if (ID_COLUMNS.indexOf(column) < 0) return { values: [], error: 'Nieznana kolumna: ' + column };
-    const src = readSource_();
-    const seen = {}, values = [];
-    src.values.forEach(r => {
-      const v = String(r[src.idx[column]]).trim();
-      if (v && !seen[v]) { seen[v] = true; values.push(v); }
+    const seen = {}, entries = [];
+    readSource_().forEach(r => {
+      if (seen[r.label]) return;
+      seen[r.label] = true;
+      entries.push({ row: r.row, label: r.label });
     });
-    return { values: values };
+    return { entries: entries };
   } catch (e) {
-    return { values: [], error: e.message };
+    return { entries: [], error: e.message };
   }
 }
 
 /**
- * Loads the first source row whose `column` equals `value` into the destination sheet.
- * Returns { ok, written, added, missingNames, warning? } | { error }.
+ * Loads the source row `row` (the first one of its label) into the destination sheet.
+ * Returns { ok, written, added, warning } | { error }.
  */
-function loadRecipe(column, value) {
+function loadRecipe(row) {
   try {
-    if (ID_COLUMNS.indexOf(column) < 0) return { error: 'Nieznana kolumna: ' + column };
-    const src = readSource_();
-    const matches = src.values.filter(r => String(r[src.idx[column]]).trim() === value);
-    if (!matches.length) return { error: 'Nie znaleziono "' + value + '" w kolumnie "' + column + '".' };
+    const rows = readSource_();
+    const chosen = rows.filter(r => r.row === row)[0];
+    if (!chosen) return { error: 'Nie znaleziono wybranej pozycji – odśwież listę.' };
 
-    const texts = matches.map(r => String(r[src.idx[RECIPE_COLUMN]]).trim());
-    const distinct = texts.filter((t, i) => texts.indexOf(t) === i);
-    const components = parseRecipe_(texts[0]);
-    if (!components.length) return { error: 'Brak odczytywalnego składu w pierwszym dopasowaniu dla "' + value + '".' };
+    const same = rows.filter(r => r.label === chosen.label);
+    const distinct = same.map(r => r.text).filter((t, i, a) => a.indexOf(t) === i);
+    const components = parseRecipe_(chosen.text);
+    if (!components.length) return { error: 'Brak odczytywalnego składu dla "' + chosen.label + '".' };
     const warning = distinct.length > 1
-      ? 'Znaleziono ' + distinct.length + ' różnych pozycji "' + RECIPE_COLUMN + '" dla "' + value + '" – wczytano pierwszą.'
+      ? 'Znaleziono ' + distinct.length + ' różnych pozycji "' + RECIPE_COLUMN + '" dla "' + chosen.label + '" – wczytano pierwszą.'
       : '';
 
     const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(RECIPE_SHEET);
@@ -119,14 +124,14 @@ function loadRecipe(column, value) {
     const writes = [];
     components.forEach(c => {
       const k = c.name.toLowerCase();
-      let row = rowOf[k];
-      if (row === undefined) {
-        row = next++;
-        rowOf[k] = row;
+      let target = rowOf[k];
+      if (target === undefined) {
+        target = next++;
+        rowOf[k] = target;
         added.push(c.name);
-        sheet.getRange(row, KEY_COL).setValue(c.name);
+        sheet.getRange(target, KEY_COL).setValue(c.name);
       }
-      writes.push([row, c.value]);
+      writes.push([target, c.value]);
     });
     writes.forEach(w => sheet.getRange(w[0], VALUE_COL).setValue(w[1]));
     SpreadsheetApp.flush();
