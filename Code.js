@@ -13,8 +13,11 @@
 // A code that is not found there is loaded as it is and reported in the warning.
 //
 // Destination: every component is appended below the data range (never below FIRST_ROW), the menu position in column B and
-// its value in column D. Nothing is merged with what is already there, so duplicates are possible. The data validation of
-// VALIDATION_CELL (B4) is copied onto the new cells of column B.
+// its value in column D. Nothing is merged with what is already there, so duplicates are possible.
+//
+// Formatting of the destination (formatRecipeSheet_, on every edit of column B and after every load): from FIRST_ROW to the last
+// row with data in column B + 1, column B gets the data validation of VALIDATION_CELL (B4) where a cell has none, and B:G get
+// alternating row backgrounds (first row white, second grey).
 // ---------------------------------------------------------------------------
 
 const SOURCE_SHEET = 'Zapisane receptury';
@@ -27,8 +30,11 @@ const CODE_COLUMN = 'Kod komponentu';
 const MENU_COLUMN = 'Pozycja menu';
 const KEY_COL = 2;          // B
 const VALUE_COL = 4;        // D
+const LAST_FORMAT_COL = 7;  // G
 const FIRST_ROW = 5;
 const VALIDATION_CELL = 'B4';
+const ROW_WHITE = '#ffffff';
+const ROW_GREY = '#e6e6e6'; // 10 % grey
 
 function onOpen() {
   SpreadsheetApp.getUi()
@@ -40,6 +46,58 @@ function onOpen() {
 function showSidebar() {
   const html = HtmlService.createHtmlOutputFromFile('Sidebar').setTitle('Receptury');
   SpreadsheetApp.getUi().showSidebar(html);
+}
+
+/** Simple trigger: an edit that touches column B of the destination sheet (below the headers) re-applies its formatting. */
+function onEdit(e) {
+  try {
+    if (!e || !e.range) return;
+    const sheet = e.range.getSheet();
+    if (sheet.getName() !== RECIPE_SHEET) return;
+    if (e.range.getLastRow() < FIRST_ROW) return;
+    if (e.range.getColumn() > KEY_COL || e.range.getLastColumn() < KEY_COL) return;
+    formatRecipeSheet_(sheet);
+  } catch (err) {
+    // an edit must never fail because of formatting
+  }
+}
+
+/**
+ * FIRST_ROW .. (last row with data in column B) + 1: data validation copied from VALIDATION_CELL into the cells of column B that
+ * have none (existing validations are not checked), and alternating backgrounds in B:G (first row white, second grey).
+ */
+function formatRecipeSheet_(sheet) {
+  const maxRows = sheet.getMaxRows();
+  if (maxRows < FIRST_ROW) return;
+
+  const lastRow = sheet.getLastRow();
+  let lastData = FIRST_ROW - 1;
+  if (lastRow >= FIRST_ROW) {
+    const keys = sheet.getRange(FIRST_ROW, KEY_COL, lastRow - FIRST_ROW + 1, 1).getValues();
+    for (let i = keys.length - 1; i >= 0; i--) {
+      if (String(keys[i][0]).trim() !== '') { lastData = FIRST_ROW + i; break; }
+    }
+  }
+  const end = Math.min(lastData + 1, maxRows);
+  const count = end - FIRST_ROW + 1;
+
+  const keyRange = sheet.getRange(FIRST_ROW, KEY_COL, count, 1);
+  const template = sheet.getRange(VALIDATION_CELL).getDataValidation();
+  if (template) {
+    const rules = keyRange.getDataValidations();
+    if (rules.some(r => !r[0])) {
+      keyRange.setDataValidations(rules.map(r => [r[0] || template]));
+    }
+  }
+
+  const colors = [];
+  for (let i = 0; i < count; i++) {
+    const color = i % 2 === 0 ? ROW_WHITE : ROW_GREY;
+    const row = [];
+    for (let c = KEY_COL; c <= LAST_FORMAT_COL; c++) row.push(color);
+    colors.push(row);
+  }
+  sheet.getRange(FIRST_ROW, KEY_COL, count, LAST_FORMAT_COL - KEY_COL + 1).setBackgrounds(colors);
 }
 
 /** A number from a cell (a decimal comma and spaces are fine); NaN when empty or not a number. */
@@ -160,13 +218,10 @@ function loadRecipe(row) {
 
     // the first empty row, as the data range tells, but never above FIRST_ROW
     const start = Math.max(sheet.getDataRange().getLastRow() + 1, FIRST_ROW);
-    const keyRange = sheet.getRange(start, KEY_COL, components.length, 1);
-    keyRange.setValues(components.map(c => [c.name]));
+    sheet.getRange(start, KEY_COL, components.length, 1).setValues(components.map(c => [c.name]));
     sheet.getRange(start, VALUE_COL, components.length, 1).setValues(components.map(c => [c.value]));
 
-    // the same data validation as the template cell (none there = nothing to copy)
-    const rule = sheet.getRange(VALIDATION_CELL).getDataValidation();
-    if (rule) keyRange.setDataValidation(rule);
+    formatRecipeSheet_(sheet);       // a script write does not fire onEdit
 
     SpreadsheetApp.flush();
     return { ok: true, written: components.length, warning: warnings.join('\n') };
