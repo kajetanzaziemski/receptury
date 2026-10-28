@@ -7,6 +7,7 @@
     body { font-family: Arial, sans-serif; font-size: 13px; margin: 0; padding: 12px; }
     h3 { margin: 0 0 8px; font-size: 15px; }
     label { display: block; margin-bottom: 4px; }
+    input[type=text] { width: 100%; box-sizing: border-box; padding: 6px; margin-bottom: 6px; }
     select { width: 100%; box-sizing: border-box; padding: 6px; }
     .row { margin: 10px 0; }
     button { padding: 6px 10px; cursor: pointer; }
@@ -21,8 +22,9 @@
 <body>
   <h3>Receptury</h3>
 
-  <label for="entry">Produkt (Receptura / Asortyment)</label>
-  <select id="entry"><option value="">Wczytywanie…</option></select>
+  <label for="filter">Produkt (Receptura / Asortyment)</label>
+  <input type="text" id="filter" placeholder="Szukaj…" oninput="render()">
+  <select id="entry"></select>
 
   <div class="row">
     <button class="primary" id="load" onclick="load()">Wczytaj</button>
@@ -33,25 +35,33 @@
 
   <script>
     const $ = id => document.getElementById(id);
+    let entries = [];
 
     function msg(text, cls) { const m = $('msg'); m.textContent = text || ''; m.className = cls || ''; }
     function warn(text) { const w = $('warn'); w.textContent = text || ''; w.style.display = text ? 'block' : 'none'; }
 
+    function render() {
+      const sel = $('entry');
+      const prev = sel.value;
+      const q = $('filter').value.trim().toLowerCase();
+      sel.textContent = '';
+      const first = document.createElement('option');
+      first.value = ''; first.textContent = '– wybierz –';
+      sel.appendChild(first);
+      entries.filter(e => !q || e.label.toLowerCase().indexOf(q) >= 0).forEach(e => {
+        const o = document.createElement('option');
+        o.value = e.row; o.textContent = e.label;
+        if (String(e.row) === prev) o.selected = true;
+        sel.appendChild(o);
+      });
+      if (q && !sel.value && sel.options.length > 1) sel.selectedIndex = 1;   // searching: preselect the first hit
+    }
+
     function refresh() {
       msg(''); warn('');
       google.script.run.withSuccessHandler(res => {
-        const sel = $('entry');
-        const prev = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : '';
-        sel.textContent = '';
-        const first = document.createElement('option');
-        first.value = ''; first.textContent = '– wybierz –';
-        sel.appendChild(first);
-        res.entries.forEach(e => {
-          const o = document.createElement('option');
-          o.value = e.row; o.textContent = e.label;
-          if (e.label === prev) o.selected = true;
-          sel.appendChild(o);
-        });
+        entries = res.entries;
+        render();
         if (res.error) msg(res.error, 'err');
       }).withFailureHandler(e => msg(e.message, 'err')).getEntries();
     }
@@ -64,7 +74,7 @@
       google.script.run.withSuccessHandler(res => {
         $('load').disabled = false;
         if (res.error) { msg(res.error, 'err'); return; }
-        let t = 'Wczytano ' + res.written + ' komponentów.';
+        let t = 'Wczytano ' + res.written + ' komponentów (wartości × ' + res.mass + ').';
         if (res.added.length) t += '\nDodano na końcu (brak w kolumnie B): ' + res.added.join(', ');
         msg(t, 'ok');
         warn(res.warning);
