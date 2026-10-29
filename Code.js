@@ -19,6 +19,9 @@
 // Formatting of the destination (formatRecipeSheet_, on every edit of column B and after every load): from FIRST_ROW to the last
 // row with data in column B + 1, column B gets the data validation of VALIDATION_CELL (B4) where a cell has none, and B:G get
 // alternating row backgrounds (first row white, second grey).
+//
+// Total-mass mode (switchToTotalMassMode_, on an edit of D3 that does not depend on D4:D): D3 becomes an input (the total
+// mass), E4:E (Zawartość %) becomes the input column and D4:D is computed as D3 * E4:E.
 // ---------------------------------------------------------------------------
 
 const SOURCE_SHEET = 'Zapisane receptury';
@@ -36,8 +39,22 @@ const FIRST_ROW = 5;
 const VALIDATION_CELL = 'B4';
 const RECIPE_NAME_CELL = 'B1';
 const PRODUCT_CELL = 'B2';
+const MASS_TOTAL_CELL = 'D3';
 const ROW_WHITE = '#ffffff';
 const ROW_GREY = '#f3f3f3';
+
+// Formulas of the total-mass mode (setFormula wants English names and commas, whatever the locale of the sheet).
+// D3 is left alone: it holds the value the user typed.
+const TOTAL_MASS_FORMULAS = {
+  C3: '=F3/D3',
+  E3: '=1-SUM(E4:E)',
+  F3: '=SUM(F4:F)',
+  G3: '=SUM(G4:G)',
+  C4: '=ArrayFormula(IF(B4:B<>"",XLOOKUP(B4:B,\'Komponenty recepturowe\'!C:C,\'Komponenty recepturowe\'!B:B,"???"),))',
+  D4: '=ArrayFormula(IF(E4:E<>"",D3*E4:E,))',
+  F4: '=ArrayFormula(IF(D4:D<>"",D4:D*C4:C,))',
+  G4: '=ArrayFormula(IF(F4:F<>"",F4:F/F$3,))'
+};
 
 function onOpen() {
   SpreadsheetApp.getUi()
@@ -51,18 +68,45 @@ function showSidebar() {
   SpreadsheetApp.getUi().showSidebar(html);
 }
 
-/** Simple trigger: an edit that touches column B of the destination sheet (below the headers) re-applies its formatting. */
+/**
+ * Simple trigger on the destination sheet:
+ *  - an edit of D3 that is a value or a formula not reading D4:D switches the sheet to the total-mass formulas;
+ *  - an edit that touches column B at row 5 or below re-applies the formatting.
+ */
 function onEdit(e) {
   try {
     if (!e || !e.range) return;
     const sheet = e.range.getSheet();
     if (sheet.getName() !== RECIPE_SHEET) return;
+
+    if (e.range.getA1Notation() === MASS_TOTAL_CELL) {
+      switchToTotalMassMode_(sheet);
+      return;
+    }
+
     if (e.range.getLastRow() < FIRST_ROW) return;
     if (e.range.getColumn() > KEY_COL || e.range.getLastColumn() < KEY_COL) return;
     formatRecipeSheet_(sheet);
   } catch (err) {
     // an edit must never fail because of formatting
   }
+}
+
+/**
+ * D3 was edited. If it now holds something that does not read D4:D directly (a typed value or a formula without that range),
+ * the total is independent: D4 becomes D3 * E4:E and E4:E turns into an input column. Does nothing when D3 was emptied, still
+ * sums D4:D, or the sheet is already in this mode. The old D5:D values are cleared, because the array formula in D4 spills over them.
+ */
+function switchToTotalMassMode_(sheet) {
+  const total = sheet.getRange(MASS_TOTAL_CELL);
+  if (String(total.getValue()).trim() === '' && !total.getFormula()) return;
+  if (total.getFormula().replace(/\$/g, '').toUpperCase().indexOf('D4:D') >= 0) return;
+  if (sheet.getRange('D4').getFormula().replace(/\$/g, '').toUpperCase().indexOf('E4:E') >= 0) return;
+
+  const maxRows = sheet.getMaxRows();
+  if (maxRows >= 4) sheet.getRange(4, VALUE_COL, maxRows - 3, 1).clearContent();
+  sheet.getRange('E4').clearContent();
+  Object.keys(TOTAL_MASS_FORMULAS).forEach(a1 => sheet.getRange(a1).setFormula(TOTAL_MASS_FORMULAS[a1]));
 }
 
 /**
