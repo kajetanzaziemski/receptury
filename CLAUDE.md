@@ -41,7 +41,7 @@ Reached when `D3` is edited to a value (or a formula that does not read `D4:D`).
 
 - Cell **B1** = the recipe name (`Receptura`), cell **B2** = the product in parentheses, e.g. `(Kisiel)`. The loader writes them only when the cell is empty or holds just `-`; anything else is left alone.
 - Column **B** = component (a `Pozycja menu`), from row 4 down. `B4` carries a data validation (the template for the cells below).
-- Columns whose row-4 cell holds an array formula are spilled: never write values into them below row 4, or the spill breaks (`#REF!`). That is `C` always, `E` and `G` in mode 1 and `D` and `G` in mode 2, plus `F` always.
+- Columns whose row-4 cell holds an array formula are spilled: never write values into them below row 4, or the spill breaks (`#REF!`). That is `C` and `F` and `G` always, `E` in mode 1 and `D` in mode 2.
 - `C` = price looked up from `Komponenty recepturowe` (menu position in its C → price in its B; `???` when not found).
 
 ## What the script does (`Code.js`)
@@ -64,7 +64,11 @@ Triggered by an edit on `Receptura` that touches column B at row 5 or below. Ran
 Triggered by an edit of exactly `D3`. It switches only when D3 now holds something that does not read `D4:D` (a typed value, or a formula without that range). It does nothing when D3 was emptied, when D3 still sums `D4:D`, or when `D4` already reads `E4:E`.
 - Sets the mode 2 formulas from `TOTAL_MASS_FORMULAS` (all of rows 3–4 listed above except `D3`, which keeps the user's value).
 - Clears `D4:D` and `E4` first: the array formula in `D4` spills over `D5:D`, so old typed masses must go. They are not converted to percentages.
-- There is no automatic way back: restore mode 1 by hand (`D3` = `=SUM(D4:D)`, `D4` empty, `E4` = the mode 1 array formula).
+
+### Switch back to mode 1 (`switchToMassInputMode_`, same `onEdit`)
+Triggered by any edit in `D5:D` (an edit touching column D at row 5 or below) while the sheet is in mode 2 (`D4` reads `E4:E`). A single-cell edit counts only when a value was typed; clearing a cell does not switch.
+- Sets `D3` to `=SUM(D4:D)`, clears `D4` (the array formula) and puts the mode 1 array formula back in `E4`. The cell typed into `D5:D` stays; the other masses were computed, so they are gone.
+- Clears `E4:E` first, because the array formula in `E4` spills over the percentages typed there. They are not converted to masses.
 
 ## Open questions
 - What the loader should write in mode 2 (the source values would belong in `E`, but they may be masses, not fractions).

@@ -20,8 +20,10 @@
 // row with data in column B + 1, column B gets the data validation of VALIDATION_CELL (B4) where a cell has none, and B:G get
 // alternating row backgrounds (first row white, second grey).
 //
-// Total-mass mode (switchToTotalMassMode_, on an edit of D3 that does not depend on D4:D): D3 becomes an input (the total
-// mass), E4:E (Zawartość %) becomes the input column and D4:D is computed as D3 * E4:E.
+// Two formula modes of the destination (see CLAUDE.md):
+//   mass input (default)  D4:D typed, E4:E computed, D3 = SUM(D4:D)
+//   total-mass mode      D3 typed (switchToTotalMassMode_, on an edit of D3 that does not read D4:D), E4:E typed, D4:D = D3 * E4:E
+//   back to mass input   (switchToMassInputMode_, on an edit in D5:D while in total-mass mode)
 // ---------------------------------------------------------------------------
 
 const SOURCE_SHEET = 'Zapisane receptury';
@@ -34,6 +36,7 @@ const CODE_COLUMN = 'Kod komponentu';
 const MENU_COLUMN = 'Pozycja menu';
 const KEY_COL = 2;          // B
 const VALUE_COL = 4;        // D
+const CONTENT_COL = 5;      // E
 const LAST_FORMAT_COL = 7;  // G
 const FIRST_ROW = 5;
 const VALIDATION_CELL = 'B4';
@@ -43,18 +46,26 @@ const MASS_TOTAL_CELL = 'D3';
 const ROW_WHITE = '#ffffff';
 const ROW_GREY = '#f3f3f3';
 
-// Formulas of the total-mass mode (setFormula wants English names and commas, whatever the locale of the sheet).
-// D3 is left alone: it holds the value the user typed.
-const TOTAL_MASS_FORMULAS = {
+// Formulas of both modes (setFormula wants English names and commas, whatever the locale of the sheet).
+const PRICE_FORMULA = '=ArrayFormula(IF(B4:B<>"",XLOOKUP(B4:B,\'Komponenty recepturowe\'!C:C,\'Komponenty recepturowe\'!B:B,"???"),))';
+const COMMON_FORMULAS = {
   C3: '=F3/D3',
   E3: '=1-SUM(E4:E)',
   F3: '=SUM(F4:F)',
   G3: '=SUM(G4:G)',
-  C4: '=ArrayFormula(IF(B4:B<>"",XLOOKUP(B4:B,\'Komponenty recepturowe\'!C:C,\'Komponenty recepturowe\'!B:B,"???"),))',
-  D4: '=ArrayFormula(IF(E4:E<>"",D3*E4:E,))',
+  C4: PRICE_FORMULA,
   F4: '=ArrayFormula(IF(D4:D<>"",D4:D*C4:C,))',
   G4: '=ArrayFormula(IF(F4:F<>"",F4:F/F$3,))'
 };
+// total-mass mode: D3 is left alone (it holds the value the user typed), D4 is computed, E4:E is the input
+const TOTAL_MASS_FORMULAS = Object.assign({}, COMMON_FORMULAS, {
+  D4: '=ArrayFormula(IF(E4:E<>"",D3*E4:E,))'
+});
+// mass input: D4:D is the input (D4 stays empty), E4:E is computed
+const MASS_INPUT_FORMULAS = Object.assign({}, COMMON_FORMULAS, {
+  D3: '=SUM(D4:D)',
+  E4: '=ArrayFormula(IF(D4:D<>"",D4:D/D$3,))'
+});
 
 function onOpen() {
   SpreadsheetApp.getUi()
@@ -71,6 +82,7 @@ function showSidebar() {
 /**
  * Simple trigger on the destination sheet:
  *  - an edit of D3 that is a value or a formula not reading D4:D switches the sheet to the total-mass formulas;
+ *  - an edit in D5:D while in that mode switches back to the mass-input formulas;
  *  - an edit that touches column B at row 5 or below re-applies the formatting.
  */
 function onEdit(e) {
@@ -84,12 +96,27 @@ function onEdit(e) {
       return;
     }
 
+    // typed into the mass column below its first row: the masses are the input again
+    if (e.range.getLastRow() >= FIRST_ROW && e.range.getColumn() <= VALUE_COL && e.range.getLastColumn() >= VALUE_COL) {
+      const single = e.range.getNumRows() === 1 && e.range.getNumColumns() === 1;
+      const typed = !single || (e.value !== undefined && e.value !== null && e.value !== '');   // clearing a cell is not typing a value
+      if (typed && isTotalMassMode_(sheet)) {
+        switchToMassInputMode_(sheet);
+        return;
+      }
+    }
+
     if (e.range.getLastRow() < FIRST_ROW) return;
     if (e.range.getColumn() > KEY_COL || e.range.getLastColumn() < KEY_COL) return;
     formatRecipeSheet_(sheet);
   } catch (err) {
     // an edit must never fail because of formatting
   }
+}
+
+/** Is D4 the total-mass array formula (it reads E4:E)? */
+function isTotalMassMode_(sheet) {
+  return sheet.getRange('D4').getFormula().replace(/\$/g, '').toUpperCase().indexOf('E4:E') >= 0;
 }
 
 /**
@@ -101,12 +128,23 @@ function switchToTotalMassMode_(sheet) {
   const total = sheet.getRange(MASS_TOTAL_CELL);
   if (String(total.getValue()).trim() === '' && !total.getFormula()) return;
   if (total.getFormula().replace(/\$/g, '').toUpperCase().indexOf('D4:D') >= 0) return;
-  if (sheet.getRange('D4').getFormula().replace(/\$/g, '').toUpperCase().indexOf('E4:E') >= 0) return;
+  if (isTotalMassMode_(sheet)) return;
 
   const maxRows = sheet.getMaxRows();
   if (maxRows >= 4) sheet.getRange(4, VALUE_COL, maxRows - 3, 1).clearContent();
   sheet.getRange('E4').clearContent();
   Object.keys(TOTAL_MASS_FORMULAS).forEach(a1 => sheet.getRange(a1).setFormula(TOTAL_MASS_FORMULAS[a1]));
+}
+
+/**
+ * Back to the mass-input formulas: D3 = SUM(D4:D), D4's array formula removed (the cells typed into D5:D stay), E4:E computed again.
+ * E4:E is cleared first, because the array formula in E4 spills over what was typed there.
+ */
+function switchToMassInputMode_(sheet) {
+  sheet.getRange('D4').clearContent();
+  const maxRows = sheet.getMaxRows();
+  if (maxRows >= 4) sheet.getRange(4, CONTENT_COL, maxRows - 3, 1).clearContent();
+  Object.keys(MASS_INPUT_FORMULAS).forEach(a1 => sheet.getRange(a1).setFormula(MASS_INPUT_FORMULAS[a1]));
 }
 
 /**
