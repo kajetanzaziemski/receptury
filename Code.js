@@ -68,6 +68,16 @@ function showSidebar() {
   SpreadsheetApp.getUi().showSidebar(html);
 }
 
+/** An error in a trigger: written to the execution log and shown as a toast (a trigger has nobody to throw to). */
+function reportError_(where, err) {
+  console.error(where + ': ' + (err && err.stack ? err.stack : err));
+  try {
+    SpreadsheetApp.getActive().toast(where + ': ' + (err && err.message ? err.message : err), 'Receptury – błąd', 15);
+  } catch (ignored) {
+    // no toast available
+  }
+}
+
 /**
  * Simple trigger on the destination sheet:
  *  - values pasted over D and E together open the dialog asking which column to keep;
@@ -83,7 +93,13 @@ function onEdit(e) {
     const sheet = range.getSheet();
     if (sheet.getName() !== RECIPE_SHEET) return;
 
-    if (range.getColumn() <= VALUE_COL && range.getLastColumn() >= CONTENT_COL) showPasteDialog_(sheet, range);
+    if (range.getColumn() <= VALUE_COL && range.getLastColumn() >= CONTENT_COL) {
+      try {
+        showPasteDialog_(sheet, range);
+      } catch (err) {
+        reportError_('okno wklejania', err);
+      }
+    }
 
     if (range.getA1Notation() === MASS_TOTAL_CELL) {
       onTotalEdited_(sheet);
@@ -106,7 +122,7 @@ function onEdit(e) {
     if (range.getColumn() > KEY_COL || range.getLastColumn() < KEY_COL) return;
     formatRecipeSheet_(sheet);
   } catch (err) {
-    // an edit must never fail because of formatting
+    reportError_('onEdit', err);
   }
 }
 
