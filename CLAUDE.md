@@ -18,37 +18,53 @@ The sidebar lists one dropdown entry per row, labelled `Produkt (Receptura)`. Sa
 A code from `Receptura - skład` is translated to the `Pozycja menu` of its FIRST row here, and that is what lands in `Receptura!B`. A code with no menu position is loaded as it is and reported in the sidebar warning.
 
 ### `Receptura` (destination)
-The header block is in `C1:G4`; columns A and B hold the entry list. Do not overwrite anything in rows 1–4, except the two title cells below.
+The header block is in `C1:G4`; columns A and B hold the entry list. Do not overwrite anything in rows 1–4, except the two title cells below and the cells the state switch rewrites (`D3`, `D4`, `E4`).
 
 Formulas are written with `;` separators (the user's Polish locale) in `Code.js` too. Apps Script's `setFormula` is documented to want `,`, so `setFormula_` writes the `;` form first and, if the cell shows a parse error (`#ERROR!` / `#BŁĄD!`), writes it again with commas. Keep any new formula free of `;` inside string literals, or that fallback breaks it.
 
-#### Mode 1 – default: masses are the input, content (%) is computed
+#### Rows 1–4 (the same in both states unless noted)
 
 | | C | D | E | F | G |
 |---|---|---|---|---|---|
 | 1 | Cena (zł/kg) | Masa (kg) | Zawartość (%) | Koszt (zł) | Udział w koszcie (%) |
 | 2 | Produkt: | Łącznie: | Brakuje do 100%: | Łącznie: | Łącznie: |
-| 3 | `=F3/D3` | `=SUM(D4:D)` | `=1-SUM(E4:E)` | `=SUM(F4:F)` | `=SUM(G4:G)` |
-| 4 | `=ArrayFormula(IF(B4:B<>"";XLOOKUP(B4:B;'Komponenty recepturowe'!C:C;'Komponenty recepturowe'!B:B;"???");))` | (empty, input) | `=ArrayFormula(IF(D4:D<>"";D4:D/D$3;))` | `=ArrayFormula(IF(D4:D<>"";D4:D*C4:C;))` | `=ArrayFormula(IF(F4:F<>"";F4:F/F$3;))` |
+| 3 | `=F3/D3` | **state dependent** | `=1-SUM(E4:E)` | `=SUM(F4:F)` | `=SUM(G4:G)` |
+| 4 | `=ArrayFormula(IF(B4:B<>"";XLOOKUP(B4:B;'Komponenty recepturowe'!C:C;'Komponenty recepturowe'!B:B;"???");))` | **state dependent** | **state dependent** | `=ArrayFormula(IF(D4:D<>"";D4:D*C4:C;))` | `=ArrayFormula(IF(F4:F<>"";F4:F/F$3;))` |
 
-#### Mode 2 – total mass: D3 is typed, content (%) is the input, masses are computed
-Reached when `D3` is edited to a value (or a formula that does not read `D4:D`). Only these cells differ from mode 1:
+#### Two states
+The sheet is always in one of them. Each has one typed column and one computed (spilled) column.
 
-| | C | D | E | F | G |
-|---|---|---|---|---|---|
-| 3 | `=F3/D3` | (typed by the user) | `=1-SUM(E4:E)` | `=SUM(F4:F)` | `=SUM(G4:G)` |
-| 4 | (as mode 1) | `=ArrayFormula(IF(E4:E<>"";D3*E4:E;))` | (empty, input) | `=ArrayFormula(IF(D4:D<>"";D4:D*C4:C;))` | `=ArrayFormula(IF(F4:F<>"";F4:F/F$3;))` |
+| | Absolute mass (default) | Relative content |
+|---|---|---|
+| Typed | `D4:D` masses | `E4:E` content (%), and `D3` the total mass |
+| `D3` | `=SUM(D4:D)` | typed number |
+| `D4` | empty (first typed mass) | `=ArrayFormula(IF(E4:E<>"";D3*E4:E;))` |
+| `E4` | `=ArrayFormula(IF(D4:D<>"";D4:D/D$3;))` | empty (first typed content) |
 
-- Cell **B1** = the recipe name (`Receptura`), cell **B2** = the product in parentheses, e.g. `(Kisiel)`. The loader writes them only when the cell is empty or holds just `-`; anything else is left alone.
-- Column **B** = component (a `Pozycja menu`), from row 4 down. `B4` carries a data validation (the template for the cells below).
-- Columns whose row-4 cell holds an array formula are spilled: never write values into them below row 4, or the spill breaks (`#REF!`). That is `C` and `F` and `G` always, `E` in mode 1 and `D` in mode 2.
-- `C` = price looked up from `Komponenty recepturowe` (menu position in its C → price in its B; `???` when not found).
+Never write values into a spilled column below row 4 yourself, or the spill breaks (`#REF!`). `C`, `F`, `G` are always spilled.
+
+Other cells: **B1** = recipe name, **B2** = the product in parentheses, e.g. `(Kisiel)` (the loader fills them only when empty or `-`). Column **B** = components (a `Pozycja menu`) from row 4 down; `B4` carries the data validation that is the template for the cells below. `C` = price looked up from `Komponenty recepturowe` (menu position in its C → price in its B; `???` when not found).
 
 ## What the script does (`Code.js`)
 
+### State switching (`onEdit` simple trigger)
+Editing the **computed** column of a state switches to the other state, in which that column is the typed one. The values of that column are kept; only the edited cells take the typed value; the other column becomes computed from it.
+
+- **Absolute → relative** (`switchToRelative_`), on an edit of `E4:E` or of `D3`:
+  - `E4:E` become typed numbers = every mass / the sum of the masses, the edited cells keeping what was typed.
+  - `D3` becomes a typed number: the former sum (edit in `E`), or what the user typed (edit of `D3`).
+  - `D4:D` is cleared and `D4` gets the mass formula. Masses of the other rows therefore stay the same.
+- **Relative → absolute** (`switchToAbsolute_`), on an edit of `D4:D`:
+  - `D4:D` become typed numbers = `D3` * content of each row, the edited cells keeping what was typed.
+  - `D3` gets `=SUM(D4:D)`, `E4:E` is cleared and `E4` gets the content formula.
+- Which state the sheet is in is read from the row-4 formula of the column the edit did NOT touch (`isAbsoluteState_`: `E4` reads `D4:D`; `isRelativeState_`: `D4` reads `E4:E`), because the edit may have overwritten the formula of its own column.
+- Clearing cells does not switch (`hasTyped_`). An emptied `D3` in the absolute state gets its `=SUM(D4:D)` back. Editing `D3` in the relative state is just changing the total.
+- Multi-column edits (a paste spanning D and E) are ignored.
+- Note: after a switch to relative, the contents typed may not add up to 100 %; `E3` ("Brakuje do 100%") shows the rest.
+
 ### Loading (`loadRecipe`)
 - Appends the components of the chosen recipe below the destination's data range (`getDataRange().getLastRow() + 1`, never above `FIRST_ROW`, currently 5). Nothing is merged with existing entries, so duplicates are allowed on purpose.
-- Writes the `Pozycja menu` to column B and the value to column D only. **It does not know about mode 2**: there D is spilled, so loading in mode 2 breaks the spill (open question, see below).
+- Writes the `Pozycja menu` to column B and the value to column D (masses). If the sheet is in the relative state it is switched to absolute first (`switchToAbsolute_`, nothing is lost), because `D` is spilled there.
 - Fills `B1` (recipe name) and `B2` (`(product)`) if they are empty or `-` (`fillIfBlank_`).
 - Never multiplies values (an earlier `Masa` column was dropped from the source).
 - Then calls `formatRecipeSheet_`, because writes made by a script do not fire `onEdit`.
@@ -59,19 +75,6 @@ Triggered by an edit on `Receptura` that touches column B at row 5 or below. Ran
 - Columns B:G: alternating backgrounds, first row white (`#ffffff`), second grey (`#f3f3f3`). No header is touched.
 - Colours and columns are the constants `ROW_WHITE`, `ROW_GREY`, `LAST_FORMAT_COL` at the top of `Code.js`.
 - Rows left below the range keep whatever background they had (it is not cleared when the list shrinks).
-
-### Switch to mode 2 (`switchToTotalMassMode_`, same `onEdit`)
-Triggered by an edit of exactly `D3`. It switches only when D3 now holds something that does not read `D4:D` (a typed value, or a formula without that range). It does nothing when D3 was emptied, when D3 still sums `D4:D`, or when `D4` already reads `E4:E`.
-- Sets the mode 2 formulas from `TOTAL_MASS_FORMULAS` (all of rows 3–4 listed above except `D3`, which keeps the user's value).
-- Clears `D4:D` and `E4` first: the array formula in `D4` spills over `D5:D`, so old typed masses must go. They are not converted to percentages.
-
-### Switch back to mode 1 (`switchToMassInputMode_`, same `onEdit`)
-Triggered by any edit in `D5:D` (an edit touching column D at row 5 or below) while the sheet is in mode 2 (`D4` reads `E4:E`). A single-cell edit counts only when a value was typed; clearing a cell does not switch.
-- Sets `D3` to `=SUM(D4:D)`, clears `D4` (the array formula) and puts the mode 1 array formula back in `E4`. The cell typed into `D5:D` stays; the other masses were computed, so they are gone.
-- Clears `E4:E` first, because the array formula in `E4` spills over the percentages typed there. They are not converted to masses.
-
-## Open questions
-- What the loader should write in mode 2 (the source values would belong in `E`, but they may be masses, not fractions).
 
 ## Git
 Development goes to `main`. Local checkout: `git clone https://github.com/kajetanzaziemski/receptury.git`; set `git config pull.rebase false` (or `true`) to silence the divergent-branches hint. The script can be synced with the Apps Script project using `clasp`.

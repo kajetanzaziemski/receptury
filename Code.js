@@ -13,17 +13,18 @@
 // A code that is not found there is loaded as it is and reported in the warning.
 //
 // Destination: every component is appended below the data range (never below FIRST_ROW), the menu position in column B and
-// its value in column D. Nothing is merged with what is already there, so duplicates are possible. B1 gets the Receptura name
+// its mass in column D. Nothing is merged with what is already there, so duplicates are possible. B1 gets the Receptura name
 // and B2 the Produkt in parentheses, but only when the cell is empty or holds just "-".
 //
 // Formatting of the destination (formatRecipeSheet_, on every edit of column B and after every load): from FIRST_ROW to the last
 // row with data in column B + 1, column B gets the data validation of VALIDATION_CELL (B4) where a cell has none, and B:G get
 // alternating row backgrounds (first row white, second grey).
 //
-// Two formula modes of the destination (see CLAUDE.md):
-//   mass input (default)  D4:D typed, E4:E computed, D3 = SUM(D4:D)
-//   total-mass mode      D3 typed (switchToTotalMassMode_, on an edit of D3 that does not read D4:D), E4:E typed, D4:D = D3 * E4:E
-//   back to mass input   (switchToMassInputMode_, on an edit in D5:D while in total-mass mode)
+// Two states of the destination (see CLAUDE.md):
+//   absolute mass     D4:D (masses) are typed, D3 = SUM(D4:D), E4:E (content %) = D / D$3
+//   relative content  E4:E (content %) are typed, D3 (total mass) is typed, D4:D = D3 * E
+// Editing the computed column of a state switches to the other state, in which that column is the typed one. The values of that
+// column are kept as they were (except the edited cells, which take the typed value) and the other column becomes computed.
 // ---------------------------------------------------------------------------
 
 const SOURCE_SHEET = 'Zapisane receptury';
@@ -38,7 +39,8 @@ const KEY_COL = 2;          // B
 const VALUE_COL = 4;        // D
 const CONTENT_COL = 5;      // E
 const LAST_FORMAT_COL = 7;  // G
-const FIRST_ROW = 5;
+const FIRST_ROW = 5;        // first row the loader writes to
+const HEAD_ROW = 4;         // row of the array formulas = first row of the mass / content columns
 const VALIDATION_CELL = 'B4';
 const RECIPE_NAME_CELL = 'B1';
 const PRODUCT_CELL = 'B2';
@@ -46,26 +48,11 @@ const MASS_TOTAL_CELL = 'D3';
 const ROW_WHITE = '#ffffff';
 const ROW_GREY = '#f3f3f3';
 
-// Formulas of both modes, written with ; as the argument separator (see setFormula_).
-const PRICE_FORMULA = '=ArrayFormula(IF(B4:B<>"";XLOOKUP(B4:B;\'Komponenty recepturowe\'!C:C;\'Komponenty recepturowe\'!B:B;"???");))';
-const COMMON_FORMULAS = {
-  C3: '=F3/D3',
-  E3: '=1-SUM(E4:E)',
-  F3: '=SUM(F4:F)',
-  G3: '=SUM(G4:G)',
-  C4: PRICE_FORMULA,
-  F4: '=ArrayFormula(IF(D4:D<>"";D4:D*C4:C;))',
-  G4: '=ArrayFormula(IF(F4:F<>"";F4:F/F$3;))'
-};
-// total-mass mode: D3 is left alone (it holds the value the user typed), D4 is computed, E4:E is the input
-const TOTAL_MASS_FORMULAS = Object.assign({}, COMMON_FORMULAS, {
-  D4: '=ArrayFormula(IF(E4:E<>"";D3*E4:E;))'
-});
-// mass input: D4:D is the input (D4 stays empty), E4:E is computed
-const MASS_INPUT_FORMULAS = Object.assign({}, COMMON_FORMULAS, {
-  D3: '=SUM(D4:D)',
-  E4: '=ArrayFormula(IF(D4:D<>"";D4:D/D$3;))'
-});
+// The formulas that differ between the two states (written with ; as the argument separator, see setFormula_).
+// Everything else in rows 3–4 (C3, E3, F3, G3, C4, F4, G4) is the same in both states and is not touched.
+const TOTAL_SUM_FORMULA = '=SUM(D4:D)';                                      // D3, absolute mass
+const CONTENT_FORMULA = '=ArrayFormula(IF(D4:D<>"";D4:D/D$3;))';               // E4, absolute mass
+const MASS_FORMULA = '=ArrayFormula(IF(E4:E<>"";D3*E4:E;))';                   // D4, relative content
 
 function onOpen() {
   SpreadsheetApp.getUi()
@@ -81,37 +68,69 @@ function showSidebar() {
 
 /**
  * Simple trigger on the destination sheet:
- *  - an edit of D3 that is a value or a formula not reading D4:D switches the sheet to the total-mass formulas;
- *  - an edit in D5:D while in that mode switches back to the mass-input formulas;
+ *  - an edit of D3 or of D4:D (the computed cells of the relative state) / E4:E (the computed cells of the absolute state)
+ *    switches the state;
  *  - an edit that touches column B at row 5 or below re-applies the formatting.
+ * The state is read from the row-4 formula of the column the edit did NOT touch, because the edit may have overwritten its own.
  */
 function onEdit(e) {
   try {
     if (!e || !e.range) return;
-    const sheet = e.range.getSheet();
+    const range = e.range;
+    const sheet = range.getSheet();
     if (sheet.getName() !== RECIPE_SHEET) return;
 
-    if (e.range.getA1Notation() === MASS_TOTAL_CELL) {
-      switchToTotalMassMode_(sheet);
+    if (range.getA1Notation() === MASS_TOTAL_CELL) {
+      onTotalEdited_(sheet);
       return;
     }
 
-    // typed into the mass column below its first row: the masses are the input again
-    if (e.range.getLastRow() >= FIRST_ROW && e.range.getColumn() <= VALUE_COL && e.range.getLastColumn() >= VALUE_COL) {
-      const single = e.range.getNumRows() === 1 && e.range.getNumColumns() === 1;
-      const typed = !single || (e.value !== undefined && e.value !== null && e.value !== '');   // clearing a cell is not typing a value
-      if (typed && isTotalMassMode_(sheet)) {
-        switchToMassInputMode_(sheet);
+    const oneColumn = range.getColumn() === range.getLastColumn();
+    if (oneColumn && range.getRow() >= HEAD_ROW) {
+      if (range.getColumn() === VALUE_COL) {
+        if (!isAbsoluteState_(sheet) && hasTyped_(range)) switchToAbsolute_(sheet, range);
+        return;
+      }
+      if (range.getColumn() === CONTENT_COL) {
+        if (!isRelativeState_(sheet) && hasTyped_(range)) switchToRelative_(sheet, range);
         return;
       }
     }
 
-    if (e.range.getLastRow() < FIRST_ROW) return;
-    if (e.range.getColumn() > KEY_COL || e.range.getLastColumn() < KEY_COL) return;
+    if (range.getLastRow() < FIRST_ROW) return;
+    if (range.getColumn() > KEY_COL || range.getLastColumn() < KEY_COL) return;
     formatRecipeSheet_(sheet);
   } catch (err) {
     // an edit must never fail because of formatting
   }
+}
+
+/** Does the formula read the given range (e.g. "D4:D")? */
+function reads_(formula, a1) {
+  return String(formula).replace(/\$/g, '').toUpperCase().indexOf(a1) >= 0;
+}
+
+/** Absolute mass state: E4 is the formula computing the content from the masses. */
+function isAbsoluteState_(sheet) { return reads_(sheet.getRange('E4').getFormula(), 'D4:D'); }
+
+/** Relative content state: D4 is the formula computing the masses from the content. */
+function isRelativeState_(sheet) { return reads_(sheet.getRange('D4').getFormula(), 'E4:E'); }
+
+/** Did the edit put at least one value into the range? (Clearing cells is not typing.) */
+function hasTyped_(range) {
+  return range.getValues().some(r => r[0] !== '' && r[0] !== null);
+}
+
+/**
+ * D3 was edited. In the absolute state D3 is the sum, so a typed value there switches to the relative state (D3 becomes the typed
+ * total). An emptied D3 gets its sum back. In the relative state D3 is the typed total and nothing happens.
+ */
+function onTotalEdited_(sheet) {
+  if (!isAbsoluteState_(sheet)) return;
+  const total = sheet.getRange(MASS_TOTAL_CELL);
+  if (reads_(total.getFormula(), 'D4:D')) return;
+  if (String(total.getValue()).trim() === '') { setFormula_(sheet, MASS_TOTAL_CELL, TOTAL_SUM_FORMULA); return; }
+  switchToRelative_(sheet, null);
 }
 
 /**
@@ -125,37 +144,66 @@ function setFormula_(sheet, a1, formula) {
   if (/^#(ERROR|BŁĄD)/i.test(String(cell.getDisplayValue()).trim())) cell.setFormula(formula.replace(/;/g, ','));
 }
 
-/** Is D4 the total-mass array formula (it reads E4:E)? */
-function isTotalMassMode_(sheet) {
-  return sheet.getRange('D4').getFormula().replace(/\$/g, '').toUpperCase().indexOf('E4:E') >= 0;
+/** The last row (at least HEAD_ROW) with something in one of the columns. */
+function lastDataRow_(sheet, cols) {
+  const last = sheet.getLastRow();
+  let result = HEAD_ROW;
+  if (last < HEAD_ROW) return result;
+  cols.forEach(c => {
+    const v = sheet.getRange(HEAD_ROW, c, last - HEAD_ROW + 1, 1).getValues();
+    for (let i = v.length - 1; i >= 0; i--) {
+      if (String(v[i][0]).trim() !== '') { result = Math.max(result, HEAD_ROW + i); break; }
+    }
+  });
+  return result;
+}
+
+/** Puts the typed values of the edited range over `arr` (an array indexed from HEAD_ROW). */
+function applyTyped_(arr, edited) {
+  if (!edited) return;
+  edited.getValues().forEach((r, i) => {
+    if (r[0] !== '' && r[0] !== null) arr[edited.getRow() + i - HEAD_ROW] = r[0];
+  });
 }
 
 /**
- * D3 was edited. If it now holds something that does not read D4:D directly (a typed value or a formula without that range),
- * the total is independent: D4 becomes D3 * E4:E and E4:E turns into an input column. Does nothing when D3 was emptied, still
- * sums D4:D, or the sheet is already in this mode. The old D5:D values are cleared, because the array formula in D4 spills over them.
+ * Absolute mass -> relative content. The contents (E4:E) become typed values: the share of every mass in the total of the masses,
+ * the edited cells keeping what was typed. The total mass (D3) becomes a typed number too (what it was; or what the user typed
+ * in it), and D4:D turns into D3 * E. `edited` = the typed cells of E4:E, or null when D3 was edited.
  */
-function switchToTotalMassMode_(sheet) {
-  const total = sheet.getRange(MASS_TOTAL_CELL);
-  if (String(total.getValue()).trim() === '' && !total.getFormula()) return;
-  if (total.getFormula().replace(/\$/g, '').toUpperCase().indexOf('D4:D') >= 0) return;
-  if (isTotalMassMode_(sheet)) return;
+function switchToRelative_(sheet, edited) {
+  const last = Math.max(lastDataRow_(sheet, [KEY_COL, VALUE_COL]), edited ? edited.getLastRow() : 0);
+  const n = last - HEAD_ROW + 1;
+  const masses = sheet.getRange(HEAD_ROW, VALUE_COL, n, 1).getValues().map(r => r[0]);
+  const sum = masses.reduce((s, v) => s + (typeof v === 'number' ? v : 0), 0);
+  const content = masses.map(v => (typeof v === 'number' && sum ? v / sum : ''));
+  applyTyped_(content, edited);
 
+  if (edited) sheet.getRange(MASS_TOTAL_CELL).setValue(sum);           // the formula goes, the number stays
+  sheet.getRange(HEAD_ROW, CONTENT_COL, n, 1).setValues(content.map(v => [v]));
   const maxRows = sheet.getMaxRows();
-  if (maxRows >= 4) sheet.getRange(4, VALUE_COL, maxRows - 3, 1).clearContent();
-  sheet.getRange('E4').clearContent();
-  Object.keys(TOTAL_MASS_FORMULAS).forEach(a1 => setFormula_(sheet, a1, TOTAL_MASS_FORMULAS[a1]));
+  sheet.getRange(HEAD_ROW, VALUE_COL, maxRows - HEAD_ROW + 1, 1).clearContent();
+  setFormula_(sheet, 'D4', MASS_FORMULA);
 }
 
 /**
- * Back to the mass-input formulas: D3 = SUM(D4:D), D4's array formula removed (the cells typed into D5:D stay), E4:E computed again.
- * E4:E is cleared first, because the array formula in E4 spills over what was typed there.
+ * Relative content -> absolute mass. The masses (D4:D) become typed values: total mass * content of each row, the edited cells
+ * keeping what was typed. D3 turns into the sum of the masses and E4:E into the content computed from them.
+ * `edited` = the typed cells of D4:D.
  */
-function switchToMassInputMode_(sheet) {
-  sheet.getRange('D4').clearContent();
+function switchToAbsolute_(sheet, edited) {
+  const last = Math.max(lastDataRow_(sheet, [KEY_COL, CONTENT_COL]), edited ? edited.getLastRow() : 0);
+  const n = last - HEAD_ROW + 1;
+  const total = toNumber_(sheet.getRange(MASS_TOTAL_CELL).getValue());
+  const content = sheet.getRange(HEAD_ROW, CONTENT_COL, n, 1).getValues().map(r => r[0]);
+  const masses = content.map(v => (typeof v === 'number' && Number.isFinite(total) ? total * v : ''));
+  applyTyped_(masses, edited);
+
   const maxRows = sheet.getMaxRows();
-  if (maxRows >= 4) sheet.getRange(4, CONTENT_COL, maxRows - 3, 1).clearContent();
-  Object.keys(MASS_INPUT_FORMULAS).forEach(a1 => setFormula_(sheet, a1, MASS_INPUT_FORMULAS[a1]));
+  sheet.getRange(HEAD_ROW, CONTENT_COL, maxRows - HEAD_ROW + 1, 1).clearContent();
+  sheet.getRange(HEAD_ROW, VALUE_COL, n, 1).setValues(masses.map(v => [v]));
+  setFormula_(sheet, MASS_TOTAL_CELL, TOTAL_SUM_FORMULA);
+  setFormula_(sheet, 'E4', CONTENT_FORMULA);
 }
 
 /**
@@ -286,7 +334,8 @@ function getEntries() {
 }
 
 /**
- * Loads the source row `row` (the first one of its label) below the data range of the destination sheet.
+ * Loads the source row `row` (the first one of its label) below the data range of the destination sheet. The loaded values are
+ * masses, so a sheet in the relative content state is switched to the absolute mass state first (nothing is lost).
  * Returns { ok, written, warning } | { error }.
  */
 function loadRecipe(row) {
@@ -319,6 +368,8 @@ function loadRecipe(row) {
 
     const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(RECIPE_SHEET);
     if (!sheet) return { error: 'Brak arkusza "' + RECIPE_SHEET + '".' };
+
+    if (isRelativeState_(sheet)) switchToAbsolute_(sheet, null);     // D4:D is spilled there
 
     // the first empty row, as the data range tells, but never above FIRST_ROW
     const start = Math.max(sheet.getDataRange().getLastRow() + 1, FIRST_ROW);
