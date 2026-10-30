@@ -61,8 +61,8 @@ Editing the **computed** column of a state switches to the other state, in which
 - Clearing cells does not switch (`hasTyped_`). An emptied `D3` in the absolute state gets its `=SUM(D4:D)` back. Editing `D3` in the relative state is just changing the total.
 - Note: after a switch to relative, the contents typed may not add up to 100 %; `E3` ("Brakuje do 100%") shows the rest.
 
-### Paste over D and E together (`onEditInstalled` + `PasteDialog.html`)
-An edit whose range spans both columns D and E is ignored by the simple `onEdit` (it cannot decide which column is the truth), and a simple trigger cannot open a dialog. So there is an **installable** edit trigger, `onEditInstalled`, that must be switched on once per spreadsheet from the menu **Receptury → Włącz pytanie przy wklejeniu w D i E** (`installPasteTrigger`; it asks for authorization and needs the `script.scriptapp` scope in `appsscript.json`). Without it a two-column paste is not handled.
+### Paste over D and E together (`showPasteDialog_` + `PasteDialog.html`)
+An edit whose range spans both columns D and E is not a one-column edit, so the state switch ignores it; instead the same simple `onEdit` opens a modal dialog (`showPasteDialog_`, plain `SpreadsheetApp.getUi().showModalDialog`; no installable trigger is needed).
 - The dialog shows the pasted rows (row, component from column B, mass, content), lets the user choose **keep masses (D)** or **keep contents (E)**, edit the values of the kept column, and (when keeping contents) edit the **total mass**. Percent input like `30%` is read as `0.3`.
 - `applyPasteChoice` then applies it (`payload.priorAbsolute` is the state before the paste, read from `D3` being the sum):
   - **keep D**: the dialog masses are written to `D`; the sheet ends in the absolute state (contents computed). From the relative state the other rows' masses are total * their content, as in `switchToAbsolute_`.
