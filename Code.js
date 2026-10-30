@@ -138,6 +138,7 @@ function onEdit(e) {
  * which one is to be kept has to be asked; the dialog also lets the values (and the total mass) be corrected first.
  * Does nothing when the cells were only cleared.
  */
+
 function onEditInstalled(e) {
   try {
     if (!e || !e.range) return;
@@ -165,6 +166,7 @@ function onEditInstalled(e) {
       const t = toNumber_(sheet.getRange(MASS_TOTAL_CELL).getValue());
       defaultTotal = Number.isFinite(t) ? t : null;
     }
+
 
     const payload = { keep: priorAbsolute ? 'D' : 'E', priorAbsolute: priorAbsolute, defaultTotal: defaultTotal, rows: rows };
     const t = HtmlService.createTemplateFromFile('PasteDialog');
