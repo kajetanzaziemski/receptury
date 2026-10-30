@@ -2,7 +2,7 @@
 
 Google Apps Script (container-bound to a Google Sheet) with one sidebar that loads a saved recipe into the `Receptura` sheet.
 Files: `Code.js` (server), `Sidebar.html` (UI, same dropdown + filter pattern as the `wyceny` project), `PasteDialog.html` (modal dialog for a paste over D and E), `appsscript.json`.
-UI strings and sheet names are Polish; keep them as they are.
+UI strings and sheet names are Polish; keep them as they are. Every `.html` file must also exist in the Apps Script project (copying only `Code.js` leaves e.g. `PasteDialog` missing).
 
 ## Sheets
 
@@ -47,7 +47,12 @@ Other cells: **B1** = recipe name, **B2** = the product in parentheses, e.g. `(K
 
 ## What the script does (`Code.js`)
 
-### State switching (`onEdit` simple trigger)
+### Triggers: simple vs installable
+- `onEdit` is a **simple** trigger. It runs without authorization, so it can edit the spreadsheet but **cannot open dialogs**: `showModalDialog` fails there with "Określone uprawnienia nie są wystarczające do wywołania Ui.showModalDialog" (verified by the user). Do not move UI calls into it.
+- `onEditInstalled` is an **installable** edit trigger, created once per spreadsheet from the menu **Receptury → Włącz pytanie przy wklejeniu w D i E** (`installPasteTrigger`; needs the `script.scriptapp` scope). It runs with the user's authorization and may open the dialog. Both triggers fire on every edit; each ignores the other's case.
+- Errors in either trigger are not thrown (nobody could see them): `reportError_` writes them to the execution log and shows a toast.
+
+### State switching (`onEdit`)
 Editing the **computed** column of a state switches to the other state, in which that column is the typed one. The values of that column are kept; only the edited cells take the typed value; the other column becomes computed from it.
 
 - **Absolute → relative** (`switchToRelative_`), on an edit of `E4:E` or of `D3`:
@@ -59,10 +64,11 @@ Editing the **computed** column of a state switches to the other state, in which
   - `D3` gets `=SUM(D4:D)`, `E4:E` is cleared and `E4` gets the content formula.
 - Which state the sheet is in is read from the row-4 formula of the column the edit did NOT touch (`isAbsoluteState_`: `E4` reads `D4:D`; `isRelativeState_`: `D4` reads `E4:E`), because the edit may have overwritten the formula of its own column.
 - Clearing cells does not switch (`hasTyped_`). An emptied `D3` in the absolute state gets its `=SUM(D4:D)` back. Editing `D3` in the relative state is just changing the total.
+- Multi-column edits are ignored by the state switch (a paste over D and E is handled by `onEditInstalled`).
 - Note: after a switch to relative, the contents typed may not add up to 100 %; `E3` ("Brakuje do 100%") shows the rest.
 
-### Paste over D and E together (`showPasteDialog_` + `PasteDialog.html`)
-An edit whose range spans both columns D and E is not a one-column edit, so the state switch ignores it; instead the same simple `onEdit` opens a modal dialog (`showPasteDialog_`, plain `SpreadsheetApp.getUi().showModalDialog`; no installable trigger is needed).
+### Paste over D and E together (`onEditInstalled` + `PasteDialog.html`)
+Without the installable trigger a two-column paste is not handled. With it:
 - The dialog shows the pasted rows (row, component from column B, mass, content), lets the user choose **keep masses (D)** or **keep contents (E)**, edit the values of the kept column, and (when keeping contents) edit the **total mass**. Percent input like `30%` is read as `0.3`.
 - `applyPasteChoice` then applies it (`payload.priorAbsolute` is the state before the paste, read from `D3` being the sum):
   - **keep D**: the dialog masses are written to `D`; the sheet ends in the absolute state (contents computed). From the relative state the other rows' masses are total * their content, as in `switchToAbsolute_`.
