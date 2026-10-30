@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <style>
+    body { font-family: Arial, sans-serif; font-size: 13px; color: #333; margin: 0; padding: 12px; }
+    p { margin: 0 0 8px; }
+    .opt { display: block; margin: 4px 0; cursor: pointer; }
+    .total { margin: 8px 0; }
+    .total input { width: 110px; padding: 4px; }
+    .total[hidden] { display: none; }
+    .tbl { max-height: 300px; overflow-y: auto; border: 1px solid #ddd; border-radius: 3px; margin-top: 8px; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { padding: 3px 6px; text-align: left; border-bottom: 1px solid #eee; }
+    th { position: sticky; top: 0; background: #fafafa; font-weight: 600; font-size: 11px; color: #777; }
+    td.name { width: 100%; overflow-wrap: anywhere; }
+    td input { width: 80px; padding: 3px; box-sizing: border-box; }
+    td input:disabled { background: #f0f0f0; color: #999; }
+    .btns { margin-top: 12px; display: flex; gap: 8px; justify-content: flex-end; }
+    button { font: inherit; padding: 6px 14px; }
+    #status { margin-top: 8px; color: #b3261e; min-height: 16px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <p>Wklejono wartości do kolumn <b>Masa (D)</b> i <b>Zawartość (E)</b>. Którą kolumnę zachować? Druga zostanie przeliczona.</p>
+
+  <label class="opt"><input type="radio" name="keep" value="D"> Zachowaj masy (kolumna D)</label>
+  <label class="opt"><input type="radio" name="keep" value="E"> Zachowaj zawartość % (kolumna E)</label>
+
+  <div class="total" id="totalBox">Masa łączna (kg): <input type="text" id="total" autocomplete="off"></div>
+
+  <div class="tbl"><table>
+    <thead><tr><th>Wiersz</th><th>Komponent</th><th>Masa (kg)</th><th>Zawartość</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table></div>
+
+  <div id="status"></div>
+  <div class="btns">
+    <button type="button" id="cancel">Anuluj</button>
+    <button type="button" id="apply">Zastosuj</button>
+  </div>
+
+  <script>
+    const DATA = <?!= payload ?>;   // { keep, priorAbsolute, defaultTotal, rows: [{ row, name, d, e }] }
+    const $ = id => document.getElementById(id);
+    const radios = Array.from(document.querySelectorAll('input[name=keep]'));
+    const inputs = [];              // [{ row, d, e }] of input elements
+
+    DATA.rows.forEach(r => {
+      const tr = document.createElement('tr');
+      const a = document.createElement('td'); a.textContent = r.row;
+      const b = document.createElement('td'); b.className = 'name'; b.textContent = r.name;
+      const d = document.createElement('input'); d.type = 'text'; d.value = r.d;
+      const e = document.createElement('input'); e.type = 'text'; e.value = r.e;
+      const c = document.createElement('td'); c.appendChild(d);
+      const f = document.createElement('td'); f.appendChild(e);
+      tr.append(a, b, c, f);
+      $('rows').appendChild(tr);
+      inputs.push({ row: r.row, d: d, e: e });
+    });
+
+    function keep() { return radios.find(r => r.checked).value; }
+
+    // The column that is not kept is shown but cannot be edited; the total matters only when the contents are kept.
+    function sync() {
+      const k = keep();
+      inputs.forEach(i => { i.d.disabled = k !== 'D'; i.e.disabled = k !== 'E'; });
+      $('totalBox').hidden = k !== 'E';
+    }
+    radios.forEach(r => { r.checked = r.value === DATA.keep; r.addEventListener('change', sync); });
+    $('total').value = DATA.defaultTotal === null ? '' : DATA.defaultTotal;
+    sync();
+
+    $('cancel').addEventListener('click', () => google.script.host.close());
+    $('apply').addEventListener('click', () => {
+      $('apply').disabled = true;
+      $('status').textContent = '';
+      const payload = {
+        keep: keep(),
+        priorAbsolute: DATA.priorAbsolute,
+        defaultTotal: DATA.defaultTotal,
+        total: $('total').value,
+        rows: inputs.map(i => ({ row: i.row, d: i.d.value, e: i.e.value }))
+      };
+      google.script.run
+        .withSuccessHandler(res => {
+          if (res && res.error) { $('apply').disabled = false; $('status').textContent = res.error; return; }
+          google.script.host.close();
+        })
+        .withFailureHandler(err => { $('apply').disabled = false; $('status').textContent = 'Błąd: ' + (err && err.message ? err.message : err); })
+        .applyPasteChoice(payload);
+    });
+  </script>
+</body>
+</html>

@@ -1,7 +1,7 @@
 # receptury – notes for agents
 
 Google Apps Script (container-bound to a Google Sheet) with one sidebar that loads a saved recipe into the `Receptura` sheet.
-Files: `Code.js` (server), `Sidebar.html` (UI, same dropdown + filter pattern as the `wyceny` project), `appsscript.json`.
+Files: `Code.js` (server), `Sidebar.html` (UI, same dropdown + filter pattern as the `wyceny` project), `PasteDialog.html` (modal dialog for a paste over D and E), `appsscript.json`.
 UI strings and sheet names are Polish; keep them as they are.
 
 ## Sheets
@@ -59,8 +59,17 @@ Editing the **computed** column of a state switches to the other state, in which
   - `D3` gets `=SUM(D4:D)`, `E4:E` is cleared and `E4` gets the content formula.
 - Which state the sheet is in is read from the row-4 formula of the column the edit did NOT touch (`isAbsoluteState_`: `E4` reads `D4:D`; `isRelativeState_`: `D4` reads `E4:E`), because the edit may have overwritten the formula of its own column.
 - Clearing cells does not switch (`hasTyped_`). An emptied `D3` in the absolute state gets its `=SUM(D4:D)` back. Editing `D3` in the relative state is just changing the total.
-- Multi-column edits (a paste spanning D and E) are ignored.
 - Note: after a switch to relative, the contents typed may not add up to 100 %; `E3` ("Brakuje do 100%") shows the rest.
+
+### Paste over D and E together (`onEditInstalled` + `PasteDialog.html`)
+An edit whose range spans both columns D and E is ignored by the simple `onEdit` (it cannot decide which column is the truth), and a simple trigger cannot open a dialog. So there is an **installable** edit trigger, `onEditInstalled`, that must be switched on once per spreadsheet from the menu **Receptury → Włącz pytanie przy wklejeniu w D i E** (`installPasteTrigger`; it asks for authorization and needs the `script.scriptapp` scope in `appsscript.json`). Without it a two-column paste is not handled.
+- The dialog shows the pasted rows (row, component from column B, mass, content), lets the user choose **keep masses (D)** or **keep contents (E)**, edit the values of the kept column, and (when keeping contents) edit the **total mass**. Percent input like `30%` is read as `0.3`.
+- `applyPasteChoice` then applies it (`payload.priorAbsolute` is the state before the paste, read from `D3` being the sum):
+  - **keep D**: the dialog masses are written to `D`; the sheet ends in the absolute state (contents computed). From the relative state the other rows' masses are total * their content, as in `switchToAbsolute_`.
+  - **keep E**: the dialog contents are written to `E`, `D3` = the dialog total; the sheet ends in the relative state. Rows that were not pasted keep their content (from the absolute state: mass / the total the dialog opened with).
+- The default total offered is the sum of `D4:D` (from the absolute state) or the current `D3` (from the relative state). The default choice is the typed column of the state before the paste.
+- Cancel leaves the pasted values exactly as pasted (and the formulas that the paste overwrote stay overwritten).
+- Clearing a selection that spans D and E does not open the dialog.
 
 ### Loading (`loadRecipe`)
 - Appends the components of the chosen recipe below the destination's data range (`getDataRange().getLastRow() + 1`, never above `FIRST_ROW`, currently 5). Nothing is merged with existing entries, so duplicates are allowed on purpose.

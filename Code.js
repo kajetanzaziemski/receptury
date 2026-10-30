@@ -25,6 +25,8 @@
 //   relative content  E4:E (content %) are typed, D3 (total mass) is typed, D4:D = D3 * E
 // Editing the computed column of a state switches to the other state, in which that column is the typed one. The values of that
 // column are kept as they were (except the edited cells, which take the typed value) and the other column becomes computed.
+// Values pasted over both columns at once need a decision, which a simple trigger cannot ask for: an INSTALLABLE edit trigger
+// (onEditInstalled, switched on from the menu) opens a dialog (PasteDialog.html) asking which column to keep.
 // ---------------------------------------------------------------------------
 
 const SOURCE_SHEET = 'Zapisane receptury';
@@ -47,6 +49,7 @@ const PRODUCT_CELL = 'B2';
 const MASS_TOTAL_CELL = 'D3';
 const ROW_WHITE = '#ffffff';
 const ROW_GREY = '#f3f3f3';
+const PASTE_TRIGGER_HANDLER = 'onEditInstalled';
 
 // The formulas that differ between the two states (written with ; as the argument separator, see setFormula_).
 // Everything else in rows 3–4 (C3, E3, F3, G3, C4, F4, G4) is the same in both states and is not touched.
@@ -58,6 +61,7 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('Receptury')
     .addItem('Otwórz panel', 'showSidebar')
+    .addItem('Włącz pytanie przy wklejeniu w D i E', 'installPasteTrigger')
     .addToUi();
 }
 
@@ -66,12 +70,25 @@ function showSidebar() {
   SpreadsheetApp.getUi().showSidebar(html);
 }
 
+/** Menu: creates the installable edit trigger that asks what to keep after a paste over D and E (once; asks for authorization). */
+function installPasteTrigger() {
+  const ui = SpreadsheetApp.getUi();
+  const exists = ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === PASTE_TRIGGER_HANDLER);
+  if (!exists) {
+    ScriptApp.newTrigger(PASTE_TRIGGER_HANDLER).forSpreadsheet(SpreadsheetApp.getActive()).onEdit().create();
+  }
+  ui.alert(exists
+    ? 'Wyzwalacz jest już włączony.'
+    : 'Włączono. Wklejenie wartości do kolumn D i E zapyta, którą kolumnę zachować.');
+}
+
 /**
  * Simple trigger on the destination sheet:
  *  - an edit of D3 or of D4:D (the computed cells of the relative state) / E4:E (the computed cells of the absolute state)
  *    switches the state;
  *  - an edit that touches column B at row 5 or below re-applies the formatting.
  * The state is read from the row-4 formula of the column the edit did NOT touch, because the edit may have overwritten its own.
+ * (An edit over D and E together is left to onEditInstalled.)
  */
 function onEdit(e) {
   try {
@@ -102,6 +119,114 @@ function onEdit(e) {
     formatRecipeSheet_(sheet);
   } catch (err) {
     // an edit must never fail because of formatting
+  }
+}
+
+/**
+ * Installable edit trigger (see installPasteTrigger): values pasted over D and E together. Both columns now hold real values, so
+ * which one is to be kept has to be asked; the dialog also lets the values (and the total mass) be corrected first.
+ */
+function onEditInstalled(e) {
+  try {
+    if (!e || !e.range) return;
+    const range = e.range;
+    const sheet = range.getSheet();
+    if (sheet.getName() !== RECIPE_SHEET) return;
+    if (range.getColumn() > VALUE_COL || range.getLastColumn() < CONTENT_COL) return;
+
+    const first = Math.max(range.getRow(), HEAD_ROW);
+    const last = range.getLastRow();
+    if (last < first) return;
+    const n = last - first + 1;
+    const d = sheet.getRange(first, VALUE_COL, n, 1).getValues();
+    const c = sheet.getRange(first, CONTENT_COL, n, 1).getValues();
+    const names = sheet.getRange(first, KEY_COL, n, 1).getValues();
+    const rows = d.map((r, i) => ({ row: first + i, name: String(names[i][0]), d: r[0], e: c[i][0] }));
+    if (!rows.some(r => r.d !== '' || r.e !== '')) return;             // clearing is not pasting
+
+    const priorAbsolute = reads_(sheet.getRange(MASS_TOTAL_CELL).getFormula(), 'D4:D');
+    let defaultTotal;
+    if (priorAbsolute) {
+      const all = sheet.getRange(HEAD_ROW, VALUE_COL, sheet.getMaxRows() - HEAD_ROW + 1, 1).getValues();
+      defaultTotal = all.reduce((s, r) => s + (typeof r[0] === 'number' ? r[0] : 0), 0);
+    } else {
+      const t = toNumber_(sheet.getRange(MASS_TOTAL_CELL).getValue());
+      defaultTotal = Number.isFinite(t) ? t : null;
+    }
+
+    const payload = { keep: priorAbsolute ? 'D' : 'E', priorAbsolute: priorAbsolute, defaultTotal: defaultTotal, rows: rows };
+    const t = HtmlService.createTemplateFromFile('PasteDialog');
+    t.payload = JSON.stringify(payload).replace(/</g, '\\u003c');
+    SpreadsheetApp.getUi().showModalDialog(t.evaluate().setWidth(520).setHeight(560), 'Wklejono wartości do kolumn D i E');
+  } catch (err) {
+    // an edit must never fail because of the dialog
+  }
+}
+
+/** A value typed in the paste dialog: '' stays '', "30%" -> 0.3, a number with a decimal comma -> number; anything else -> NaN. */
+function parseDialogValue_(s) {
+  const t = String(s === null || s === undefined ? '' : s).trim();
+  if (t === '') return '';
+  if (/%$/.test(t)) { const n = toNumber_(t.slice(0, -1)); return Number.isFinite(n) ? n / 100 : NaN; }
+  return toNumber_(t);
+}
+
+/**
+ * Called by the paste dialog. payload = { keep: 'D'|'E', priorAbsolute, defaultTotal, total, rows: [{row, d, e}] } (strings from the dialog).
+ *  keep D: the masses (as in the dialog) are typed, the contents are computed from them;
+ *  keep E: the contents (as in the dialog) are typed and the total mass is `total`; the masses are computed.
+ * Rows outside the pasted ones keep their values in the column that is kept. Returns { ok } | { error }.
+ */
+function applyPasteChoice(p) {
+  try {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(RECIPE_SHEET);
+    if (!sheet) return { error: 'Brak arkusza "' + RECIPE_SHEET + '".' };
+
+    const rows = [];
+    for (let i = 0; i < p.rows.length; i++) {
+      const d = parseDialogValue_(p.rows[i].d), c = parseDialogValue_(p.rows[i].e);
+      if (d !== '' && !Number.isFinite(d)) return { error: 'Nieprawidłowa masa w wierszu ' + p.rows[i].row + '.' };
+      if (c !== '' && !Number.isFinite(c)) return { error: 'Nieprawidłowa zawartość w wierszu ' + p.rows[i].row + '.' };
+      rows.push({ row: p.rows[i].row, d: d, e: c });
+    }
+    if (!rows.length) return { ok: true };
+    const first = rows[0].row, lastPasted = rows[rows.length - 1].row;
+    const maxRows = sheet.getMaxRows();
+
+    if (p.keep === 'D') {
+      const dRange = sheet.getRange(first, VALUE_COL, rows.length, 1);
+      dRange.setValues(rows.map(r => [r.d]));
+      if (p.priorAbsolute) {
+        sheet.getRange(HEAD_ROW, CONTENT_COL, maxRows - HEAD_ROW + 1, 1).clearContent();
+        setFormula_(sheet, 'E4', CONTENT_FORMULA);
+      } else {
+        switchToAbsolute_(sheet, dRange);     // the other rows: total mass * their typed contents
+      }
+      return { ok: true };
+    }
+
+    const total = toNumber_(p.total);
+    if (!Number.isFinite(total)) return { error: 'Podaj masę łączną (liczbę).' };
+    const last = Math.max(lastDataRow_(sheet, [KEY_COL, VALUE_COL, CONTENT_COL]), lastPasted);
+    const n = last - HEAD_ROW + 1;
+    let content;
+    if (p.priorAbsolute) {
+      // contents of the rows that were not pasted: their mass / the total the dialog started with
+      const t0 = Number(p.defaultTotal);
+      content = sheet.getRange(HEAD_ROW, VALUE_COL, n, 1).getValues().map(r => (typeof r[0] === 'number' && t0 ? r[0] / t0 : ''));
+    } else {
+      content = sheet.getRange(HEAD_ROW, CONTENT_COL, n, 1).getValues().map(r => r[0]);
+    }
+    rows.forEach(r => { content[r.row - HEAD_ROW] = r.e; });
+
+    sheet.getRange(HEAD_ROW, CONTENT_COL, n, 1).setValues(content.map(v => [v]));
+    sheet.getRange(MASS_TOTAL_CELL).setValue(total);
+    sheet.getRange(HEAD_ROW, VALUE_COL, maxRows - HEAD_ROW + 1, 1).clearContent();
+    setFormula_(sheet, 'D4', MASS_FORMULA);
+    SpreadsheetApp.flush();
+    return { ok: true };
+  } catch (err) {
+    return { error: err.message };
   }
 }
 
