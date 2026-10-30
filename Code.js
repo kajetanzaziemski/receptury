@@ -58,12 +58,24 @@ const TOTAL_SUM_FORMULA = '=SUM(D4:D)';                                      // 
 const CONTENT_FORMULA = '=ArrayFormula(IF(D4:D<>"";D4:D/D$3;))';               // E4, absolute mass
 const MASS_FORMULA = '=ArrayFormula(IF(E4:E<>"";D3*E4:E;))';                   // D4, relative content
 
+/** Is the installable paste trigger there? false also when the project triggers cannot be read (a simple onOpen may lack the permission). */
+function hasPasteTrigger_() {
+  try {
+    return ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === PASTE_TRIGGER_HANDLER);
+  } catch (err) {
+    return false;
+  }
+}
+
+/** (Re)builds the menu; the item that switches the paste trigger on is there only while the trigger is not. */
+function buildMenu_(pasteTriggerOn) {
+  const menu = SpreadsheetApp.getUi().createMenu('Receptury').addItem('Wczytaj recepturę', 'showSidebar');
+  if (!pasteTriggerOn) menu.addItem('Włącz pytanie przy wklejeniu w D i E', 'installPasteTrigger');
+  menu.addToUi();
+}
+
 function onOpen() {
-  SpreadsheetApp.getUi()
-    .createMenu('Receptury')
-    .addItem('Otwórz panel', 'showSidebar')
-    .addItem('Włącz pytanie przy wklejeniu w D i E', 'installPasteTrigger')
-    .addToUi();
+  buildMenu_(hasPasteTrigger_());
 }
 
 function showSidebar() {
@@ -78,6 +90,7 @@ function installPasteTrigger() {
   if (!exists) {
     ScriptApp.newTrigger(PASTE_TRIGGER_HANDLER).forSpreadsheet(SpreadsheetApp.getActive()).onEdit().create();
   }
+  buildMenu_(true);
   ui.alert(exists
     ? 'Wyzwalacz jest już włączony.'
     : 'Włączono. Wklejenie wartości do kolumn D i E zapyta, którą kolumnę zachować.');
@@ -138,7 +151,6 @@ function onEdit(e) {
  * which one is to be kept has to be asked; the dialog also lets the values (and the total mass) be corrected first.
  * Does nothing when the cells were only cleared.
  */
-
 function onEditInstalled(e) {
   try {
     if (!e || !e.range) return;
@@ -166,7 +178,6 @@ function onEditInstalled(e) {
       const t = toNumber_(sheet.getRange(MASS_TOTAL_CELL).getValue());
       defaultTotal = Number.isFinite(t) ? t : null;
     }
-
 
     const payload = { keep: priorAbsolute ? 'D' : 'E', priorAbsolute: priorAbsolute, defaultTotal: defaultTotal, rows: rows };
     const t = HtmlService.createTemplateFromFile('PasteDialog');
