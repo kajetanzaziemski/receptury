@@ -46,25 +46,25 @@ const MASS_TOTAL_CELL = 'D3';
 const ROW_WHITE = '#ffffff';
 const ROW_GREY = '#f3f3f3';
 
-// Formulas of both modes (setFormula wants English names and commas, whatever the locale of the sheet).
-const PRICE_FORMULA = '=ArrayFormula(IF(B4:B<>"",XLOOKUP(B4:B,\'Komponenty recepturowe\'!C:C,\'Komponenty recepturowe\'!B:B,"???"),))';
+// Formulas of both modes, written with ; as the argument separator (see setFormula_).
+const PRICE_FORMULA = '=ArrayFormula(IF(B4:B<>"";XLOOKUP(B4:B;\'Komponenty recepturowe\'!C:C;\'Komponenty recepturowe\'!B:B;"???");))';
 const COMMON_FORMULAS = {
   C3: '=F3/D3',
   E3: '=1-SUM(E4:E)',
   F3: '=SUM(F4:F)',
   G3: '=SUM(G4:G)',
   C4: PRICE_FORMULA,
-  F4: '=ArrayFormula(IF(D4:D<>"",D4:D*C4:C,))',
-  G4: '=ArrayFormula(IF(F4:F<>"",F4:F/F$3,))'
+  F4: '=ArrayFormula(IF(D4:D<>"";D4:D*C4:C;))',
+  G4: '=ArrayFormula(IF(F4:F<>"";F4:F/F$3;))'
 };
 // total-mass mode: D3 is left alone (it holds the value the user typed), D4 is computed, E4:E is the input
 const TOTAL_MASS_FORMULAS = Object.assign({}, COMMON_FORMULAS, {
-  D4: '=ArrayFormula(IF(E4:E<>"",D3*E4:E,))'
+  D4: '=ArrayFormula(IF(E4:E<>"";D3*E4:E;))'
 });
 // mass input: D4:D is the input (D4 stays empty), E4:E is computed
 const MASS_INPUT_FORMULAS = Object.assign({}, COMMON_FORMULAS, {
   D3: '=SUM(D4:D)',
-  E4: '=ArrayFormula(IF(D4:D<>"",D4:D/D$3,))'
+  E4: '=ArrayFormula(IF(D4:D<>"";D4:D/D$3;))'
 });
 
 function onOpen() {
@@ -114,6 +114,17 @@ function onEdit(e) {
   }
 }
 
+/**
+ * Writes a formula given with ; as the argument separator. Apps Script is documented to want , there, so when the sheet answers
+ * with a parse error the same formula is written again with commas (none of the formulas has a ; inside a string).
+ */
+function setFormula_(sheet, a1, formula) {
+  const cell = sheet.getRange(a1);
+  cell.setFormula(formula);
+  SpreadsheetApp.flush();
+  if (/^#(ERROR|BŁĄD)/i.test(String(cell.getDisplayValue()).trim())) cell.setFormula(formula.replace(/;/g, ','));
+}
+
 /** Is D4 the total-mass array formula (it reads E4:E)? */
 function isTotalMassMode_(sheet) {
   return sheet.getRange('D4').getFormula().replace(/\$/g, '').toUpperCase().indexOf('E4:E') >= 0;
@@ -133,7 +144,7 @@ function switchToTotalMassMode_(sheet) {
   const maxRows = sheet.getMaxRows();
   if (maxRows >= 4) sheet.getRange(4, VALUE_COL, maxRows - 3, 1).clearContent();
   sheet.getRange('E4').clearContent();
-  Object.keys(TOTAL_MASS_FORMULAS).forEach(a1 => sheet.getRange(a1).setFormula(TOTAL_MASS_FORMULAS[a1]));
+  Object.keys(TOTAL_MASS_FORMULAS).forEach(a1 => setFormula_(sheet, a1, TOTAL_MASS_FORMULAS[a1]));
 }
 
 /**
@@ -144,7 +155,7 @@ function switchToMassInputMode_(sheet) {
   sheet.getRange('D4').clearContent();
   const maxRows = sheet.getMaxRows();
   if (maxRows >= 4) sheet.getRange(4, CONTENT_COL, maxRows - 3, 1).clearContent();
-  Object.keys(MASS_INPUT_FORMULAS).forEach(a1 => sheet.getRange(a1).setFormula(MASS_INPUT_FORMULAS[a1]));
+  Object.keys(MASS_INPUT_FORMULAS).forEach(a1 => setFormula_(sheet, a1, MASS_INPUT_FORMULAS[a1]));
 }
 
 /**

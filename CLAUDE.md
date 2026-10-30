@@ -20,7 +20,7 @@ A code from `Receptura - skład` is translated to the `Pozycja menu` of its FIRS
 ### `Receptura` (destination)
 The header block is in `C1:G4`; columns A and B hold the entry list. Do not overwrite anything in rows 1–4, except the two title cells below.
 
-Formulas are shown as the user writes them (Polish locale, `;` separators). `setFormula` in Apps Script needs English names and `,` separators, so `Code.js` stores them that way.
+Formulas are written with `;` separators (the user's Polish locale) in `Code.js` too. Apps Script's `setFormula` is documented to want `,`, so `setFormula_` writes the `;` form first and, if the cell shows a parse error (`#ERROR!` / `#BŁĄD!`), writes it again with commas. Keep any new formula free of `;` inside string literals, or that fallback breaks it.
 
 #### Mode 1 – default: masses are the input, content (%) is computed
 
