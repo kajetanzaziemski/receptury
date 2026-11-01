@@ -22,7 +22,7 @@
 //
 // Formatting of the destination (formatRecipeSheet_, on every edit of column B and after every load): from the row under the
 // marker to the last row with data in column B + 1, column B gets the data validation of the marker row where a cell has none,
-// and B:G get alternating row backgrounds (first row white, second grey).
+// and B:G get the NATIVE Sheets alternating colours (a banding: first row white, second grey).
 //
 // Two states of the destination (see CLAUDE.md), r = the marker row:
 //   absolute mass     D{r}:D (masses) are typed, D3 = SUM(D{r}:D), E{r}:E (content %) = D / D$3
@@ -399,9 +399,13 @@ function switchToAbsolute_(sheet, L, edited) {
 }
 
 /**
- * The row under the marker .. (last row with data in column B) + 1: data validation copied from the marker row's cell of column B
- * into the cells of column B that have none (existing validations are not checked), and alternating backgrounds in B:G
- * (first row white, second grey).
+ * The row under the marker .. (last row with data in column B) + 1:
+ *  - data validation copied from the marker row's cell of column B into the cells of column B that have none (existing
+ *    validations are not checked);
+ *  - the native Sheets alternating colours (a banding) over B:G of those rows: first row white, second grey, no header / footer.
+ *    The banding that already starts at the first entry row is reused and only resized; any other banding that overlaps the
+ *    range is removed (Sheets does not allow two overlapping ones). Plain cell backgrounds of the range are cleared, since a
+ *    cell background would hide the banding.
  */
 function formatRecipeSheet_(sheet, L) {
   const maxRows = sheet.getMaxRows();
@@ -427,14 +431,20 @@ function formatRecipeSheet_(sheet, L) {
     }
   }
 
-  const colors = [];
-  for (let i = 0; i < count; i++) {
-    const color = i % 2 === 0 ? ROW_WHITE : ROW_GREY;
-    const row = [];
-    for (let c = KEY_COL; c <= LAST_FORMAT_COL; c++) row.push(color);
-    colors.push(row);
-  }
-  sheet.getRange(L.first, KEY_COL, count, LAST_FORMAT_COL - KEY_COL + 1).setBackgrounds(colors);
+  const target = sheet.getRange(L.first, KEY_COL, count, LAST_FORMAT_COL - KEY_COL + 1);
+  target.setBackground(null);
+
+  let banding = null;
+  sheet.getBandings().forEach(b => {
+    const r = b.getRange();
+    const overlaps = r.getRow() <= end && r.getLastRow() >= L.first && r.getColumn() <= LAST_FORMAT_COL && r.getLastColumn() >= KEY_COL;
+    if (!overlaps) return;
+    if (!banding && r.getRow() === L.first && r.getColumn() === KEY_COL) banding = b;
+    else b.remove();
+  });
+  if (banding) banding.setRange(target);
+  else banding = target.applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY, false, false);
+  banding.setHeaderRowColor(null).setFooterRowColor(null).setFirstRowColor(ROW_WHITE).setSecondRowColor(ROW_GREY);
 }
 
 /** Puts `text` into the cell only when it is empty or holds just "-" (and there is something to put). */

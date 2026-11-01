@@ -102,9 +102,9 @@ Without the installable trigger a two-column paste is not handled. With it:
 ### Formatting (`formatRecipeSheet_`, run by the simple `onEdit` trigger and after loading)
 Triggered by an edit on `Receptura` that touches column B under the marker row. Range = row `r+1` down to the last row with data in column B, plus one.
 - Column B: every cell that has no data validation gets the one from `B{r}`. Existing validations are not verified or changed.
-- Columns B:G: alternating backgrounds, first row white (`#ffffff`), second grey (`#f3f3f3`). No header is touched.
+- Columns B:G: the **native Sheets alternating colours** (a banding, `Range.applyRowBanding`), first row white (`#ffffff`), second grey (`#f3f3f3`), no header / footer colour. Not cell backgrounds. The banding that starts at row `r+1` in column B is reused and just resized (`setRange`) as the list grows or shrinks; any other banding overlapping the range is removed, because Sheets allows no overlapping bandings.
+- The plain cell backgrounds of the range are cleared on each run (`setBackground(null)`): a cell background would hide the banding, and older versions of the script painted the rows with backgrounds. Anything the user colours by hand inside B:G of the entry rows is therefore reset on the next edit of column B.
 - Colours and columns are the constants `ROW_WHITE`, `ROW_GREY`, `LAST_FORMAT_COL` at the top of `Code.js`.
-- Rows left below the range keep whatever background they had (it is not cleared when the list shrinks).
 
 ## Git
 Development goes to `main`. Local checkout: `git clone https://github.com/kajetanzaziemski/receptury.git`; set `git config pull.rebase false` (or `true`) to silence the divergent-branches hint. The script can be synced with the Apps Script project using `clasp`.
