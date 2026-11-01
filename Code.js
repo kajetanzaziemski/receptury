@@ -12,17 +12,21 @@
 // to "Pozycja menu"; the FIRST row with the code gives the menu position, which is what goes into the destination.
 // A code that is not found there is loaded as it is and reported in the warning.
 //
-// Destination: every component is appended below the data range (never below FIRST_ROW), the menu position in column B and
-// its mass in column D. Nothing is merged with what is already there, so duplicates are possible. B1 gets the Receptura name
-// and B2 the Produkt in parentheses, but only when the cell is empty or holds just "-".
+// Rows of the destination are NOT fixed numbers: the row that holds the array formulas and the template data validation is
+// the one with MARKER ("TECHNICZNY") in column A (see layout_). Everything is relative to it: the total row is the row right above,
+// the entries start in the row right below.
 //
-// Formatting of the destination (formatRecipeSheet_, on every edit of column B and after every load): from FIRST_ROW to the last
-// row with data in column B + 1, column B gets the data validation of VALIDATION_CELL (B4) where a cell has none, and B:G get
-// alternating row backgrounds (first row white, second grey).
+// Destination: every component is appended below the data range (never above the row under the marker), the menu position in
+// column B and its mass in column D. Nothing is merged with what is already there, so duplicates are possible. The cells
+// RECIPE_NAME_CELL and PRODUCT_CELL get the Receptura name and the Produkt in parentheses, but only when empty or holding just "-".
 //
-// Two states of the destination (see CLAUDE.md):
-//   absolute mass     D4:D (masses) are typed, D3 = SUM(D4:D), E4:E (content %) = D / D$3
-//   relative content  E4:E (content %) are typed, D3 (total mass) is typed, D4:D = D3 * E
+// Formatting of the destination (formatRecipeSheet_, on every edit of column B and after every load): from the row under the
+// marker to the last row with data in column B + 1, column B gets the data validation of the marker row where a cell has none,
+// and B:G get alternating row backgrounds (first row white, second grey).
+//
+// Two states of the destination (see CLAUDE.md), r = the marker row:
+//   absolute mass     D{r}:D (masses) are typed, D{r-1} = SUM(D{r}:D), E{r}:E (content %) = D / D${r-1}
+//   relative content  E{r}:E (content %) are typed, D{r-1} (total mass) is typed, D{r}:D = D{r-1} * E
 // Editing the computed column of a state switches to the other state, in which that column is the typed one. The values of that
 // column are kept as they were (except the edited cells, which take the typed value) and the other column becomes computed.
 // Values pasted over both columns at once need a decision. A SIMPLE trigger has no permission to open a dialog ("Określone
@@ -42,21 +46,51 @@ const KEY_COL = 2;          // B
 const VALUE_COL = 4;        // D
 const CONTENT_COL = 5;      // E
 const LAST_FORMAT_COL = 7;  // G
-const FIRST_ROW = 5;        // first row the loader writes to
-const HEAD_ROW = 4;         // row of the array formulas = first row of the mass / content columns
-const VALIDATION_CELL = 'B4';
+const MARKER = 'TECHNICZNY';
+const MARKER_SEARCH_ROWS = 200;
 const RECIPE_NAME_CELL = 'B1';
 const PRODUCT_CELL = 'B2';
-const MASS_TOTAL_CELL = 'D3';
 const ROW_WHITE = '#ffffff';
 const ROW_GREY = '#f3f3f3';
 const PASTE_TRIGGER_HANDLER = 'onEditInstalled';
 
-// The formulas that differ between the two states (written with ; as the argument separator, see setFormula_).
-// Everything else in rows 3–4 (C3, E3, F3, G3, C4, F4, G4) is the same in both states and is not touched.
-const TOTAL_SUM_FORMULA = '=SUM(D4:D)';                                      // D3, absolute mass
-const CONTENT_FORMULA = '=ArrayFormula(IF(D4:D<>"";D4:D/D$3;))';               // E4, absolute mass
-const MASS_FORMULA = '=ArrayFormula(IF(E4:E<>"";D3*E4:E;))';                   // D4, relative content
+/**
+ * Where things are on the destination sheet, from the row with MARKER in column A:
+ * { head (the marker row: array formulas, template validation, first row of the mass / content columns),
+ *   total (the row above: total mass), first (the first row the loader may write to), totalCell, validationCell,
+ *   massCell, contentCell, massRange, contentRange }. Throws a Polish message when there is no marker.
+ */
+function layout_(sheet) {
+  const n = Math.min(sheet.getMaxRows(), MARKER_SEARCH_ROWS);
+  const col = sheet.getRange(1, 1, n, 1).getValues();
+  const i = col.findIndex(r => String(r[0]).trim().toUpperCase() === MARKER);
+  if (i < 0) throw new Error('Nie znaleziono znacznika "' + MARKER + '" w kolumnie A arkusza "' + sheet.getName() + '".');
+  const head = i + 1;
+  if (head < 2) throw new Error('Znacznik "' + MARKER + '" nie może być w pierwszym wierszu – nad nim jest wiersz sumy.');
+  return {
+    head: head,
+    total: head - 1,
+    first: head + 1,
+    totalCell: 'D' + (head - 1),
+    validationCell: 'B' + head,
+    massCell: 'D' + head,
+    contentCell: 'E' + head,
+    massRange: 'D' + head + ':D',
+    contentRange: 'E' + head + ':E'
+  };
+}
+
+/**
+ * The formulas that differ between the two states (written with ; as the argument separator, see setFormula_). Everything else in
+ * the header block (price, cost, share) is the same in both states and is not touched.
+ */
+function formulas_(L) {
+  return {
+    totalSum: '=SUM(' + L.massRange + ')',                                                                                // total, absolute mass
+    content: '=ArrayFormula(IF(' + L.massRange + '<>"";' + L.massRange + '/D$' + L.total + ';))',                         // content cell, absolute mass
+    mass: '=ArrayFormula(IF(' + L.contentRange + '<>"";D' + L.total + '*' + L.contentRange + ';))'                         // mass cell, relative content
+  };
+}
 
 /** Is the installable paste trigger there? false also when the project triggers cannot be read (a simple onOpen may lack the permission). */
 function hasPasteTrigger_() {
@@ -108,10 +142,10 @@ function reportError_(where, err) {
 
 /**
  * Simple trigger on the destination sheet:
- *  - an edit of D3 or of D4:D (the computed cells of the relative state) / E4:E (the computed cells of the absolute state)
- *    switches the state;
- *  - an edit that touches column B at row 5 or below re-applies the formatting.
- * The state is read from the row-4 formula of the column the edit did NOT touch, because the edit may have overwritten its own.
+ *  - an edit of the total mass or of the mass column (the computed cells of the relative state) / the content column (the computed
+ *    cells of the absolute state) switches the state;
+ *  - an edit that touches column B under the marker row re-applies the formatting.
+ * The state is read from the marker-row formula of the column the edit did NOT touch, because the edit may have overwritten its own.
  * (An edit over D and E together is left to onEditInstalled.)
  */
 function onEdit(e) {
@@ -120,27 +154,28 @@ function onEdit(e) {
     const range = e.range;
     const sheet = range.getSheet();
     if (sheet.getName() !== RECIPE_SHEET) return;
+    const L = layout_(sheet);
 
-    if (range.getA1Notation() === MASS_TOTAL_CELL) {
-      onTotalEdited_(sheet);
+    if (range.getA1Notation() === L.totalCell) {
+      onTotalEdited_(sheet, L);
       return;
     }
 
     const oneColumn = range.getColumn() === range.getLastColumn();
-    if (oneColumn && range.getRow() >= HEAD_ROW) {
+    if (oneColumn && range.getRow() >= L.head) {
       if (range.getColumn() === VALUE_COL) {
-        if (!isAbsoluteState_(sheet) && hasTyped_(range)) switchToAbsolute_(sheet, range);
+        if (!isAbsoluteState_(sheet, L) && hasTyped_(range)) switchToAbsolute_(sheet, L, range);
         return;
       }
       if (range.getColumn() === CONTENT_COL) {
-        if (!isRelativeState_(sheet) && hasTyped_(range)) switchToRelative_(sheet, range);
+        if (!isRelativeState_(sheet, L) && hasTyped_(range)) switchToRelative_(sheet, L, range);
         return;
       }
     }
 
-    if (range.getLastRow() < FIRST_ROW) return;
+    if (range.getLastRow() < L.first) return;
     if (range.getColumn() > KEY_COL || range.getLastColumn() < KEY_COL) return;
-    formatRecipeSheet_(sheet);
+    formatRecipeSheet_(sheet, L);
   } catch (err) {
     reportError_('onEdit', err);
   }
@@ -158,8 +193,9 @@ function onEditInstalled(e) {
     const sheet = range.getSheet();
     if (sheet.getName() !== RECIPE_SHEET) return;
     if (range.getColumn() > VALUE_COL || range.getLastColumn() < CONTENT_COL) return;
+    const L = layout_(sheet);
 
-    const first = Math.max(range.getRow(), HEAD_ROW);
+    const first = Math.max(range.getRow(), L.head);
     const last = range.getLastRow();
     if (last < first) return;
     const n = last - first + 1;
@@ -169,13 +205,13 @@ function onEditInstalled(e) {
     const rows = d.map((r, i) => ({ row: first + i, name: String(names[i][0]), d: r[0], e: c[i][0] }));
     if (!rows.some(r => r.d !== '' || r.e !== '')) return;             // clearing is not pasting
 
-    const priorAbsolute = reads_(sheet.getRange(MASS_TOTAL_CELL).getFormula(), 'D4:D');
+    const priorAbsolute = reads_(sheet.getRange(L.totalCell).getFormula(), L.massRange);
     let defaultTotal;
     if (priorAbsolute) {
-      const all = sheet.getRange(HEAD_ROW, VALUE_COL, sheet.getMaxRows() - HEAD_ROW + 1, 1).getValues();
+      const all = sheet.getRange(L.head, VALUE_COL, sheet.getMaxRows() - L.head + 1, 1).getValues();
       defaultTotal = all.reduce((s, r) => s + (typeof r[0] === 'number' ? r[0] : 0), 0);
     } else {
-      const t = toNumber_(sheet.getRange(MASS_TOTAL_CELL).getValue());
+      const t = toNumber_(sheet.getRange(L.totalCell).getValue());
       defaultTotal = Number.isFinite(t) ? t : null;
     }
 
@@ -206,6 +242,8 @@ function applyPasteChoice(p) {
   try {
     const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(RECIPE_SHEET);
     if (!sheet) return { error: 'Brak arkusza "' + RECIPE_SHEET + '".' };
+    const L = layout_(sheet);
+    const F = formulas_(L);
 
     const rows = [];
     for (let i = 0; i < p.rows.length; i++) {
@@ -222,32 +260,32 @@ function applyPasteChoice(p) {
       const dRange = sheet.getRange(first, VALUE_COL, rows.length, 1);
       dRange.setValues(rows.map(r => [r.d]));
       if (p.priorAbsolute) {
-        sheet.getRange(HEAD_ROW, CONTENT_COL, maxRows - HEAD_ROW + 1, 1).clearContent();
-        setFormula_(sheet, 'E4', CONTENT_FORMULA);
+        sheet.getRange(L.head, CONTENT_COL, maxRows - L.head + 1, 1).clearContent();
+        setFormula_(sheet, L.contentCell, F.content);
       } else {
-        switchToAbsolute_(sheet, dRange);     // the other rows: total mass * their typed contents
+        switchToAbsolute_(sheet, L, dRange);     // the other rows: total mass * their typed contents
       }
       return { ok: true };
     }
 
     const total = toNumber_(p.total);
     if (!Number.isFinite(total)) return { error: 'Podaj masę łączną (liczbę).' };
-    const last = Math.max(lastDataRow_(sheet, [KEY_COL, VALUE_COL, CONTENT_COL]), lastPasted);
-    const n = last - HEAD_ROW + 1;
+    const last = Math.max(lastDataRow_(sheet, L, [KEY_COL, VALUE_COL, CONTENT_COL]), lastPasted);
+    const n = last - L.head + 1;
     let content;
     if (p.priorAbsolute) {
       // contents of the rows that were not pasted: their mass / the total the dialog started with
       const t0 = Number(p.defaultTotal);
-      content = sheet.getRange(HEAD_ROW, VALUE_COL, n, 1).getValues().map(r => (typeof r[0] === 'number' && t0 ? r[0] / t0 : ''));
+      content = sheet.getRange(L.head, VALUE_COL, n, 1).getValues().map(r => (typeof r[0] === 'number' && t0 ? r[0] / t0 : ''));
     } else {
-      content = sheet.getRange(HEAD_ROW, CONTENT_COL, n, 1).getValues().map(r => r[0]);
+      content = sheet.getRange(L.head, CONTENT_COL, n, 1).getValues().map(r => r[0]);
     }
-    rows.forEach(r => { content[r.row - HEAD_ROW] = r.e; });
+    rows.forEach(r => { content[r.row - L.head] = r.e; });
 
-    sheet.getRange(HEAD_ROW, CONTENT_COL, n, 1).setValues(content.map(v => [v]));
-    sheet.getRange(MASS_TOTAL_CELL).setValue(total);
-    sheet.getRange(HEAD_ROW, VALUE_COL, maxRows - HEAD_ROW + 1, 1).clearContent();
-    setFormula_(sheet, 'D4', MASS_FORMULA);
+    sheet.getRange(L.head, CONTENT_COL, n, 1).setValues(content.map(v => [v]));
+    sheet.getRange(L.totalCell).setValue(total);
+    sheet.getRange(L.head, VALUE_COL, maxRows - L.head + 1, 1).clearContent();
+    setFormula_(sheet, L.massCell, F.mass);
     SpreadsheetApp.flush();
     return { ok: true };
   } catch (err) {
@@ -255,16 +293,16 @@ function applyPasteChoice(p) {
   }
 }
 
-/** Does the formula read the given range (e.g. "D4:D")? */
+/** Does the formula read the given range (e.g. "D5:D")? */
 function reads_(formula, a1) {
   return String(formula).replace(/\$/g, '').toUpperCase().indexOf(a1) >= 0;
 }
 
-/** Absolute mass state: E4 is the formula computing the content from the masses. */
-function isAbsoluteState_(sheet) { return reads_(sheet.getRange('E4').getFormula(), 'D4:D'); }
+/** Absolute mass state: the content cell is the formula computing the content from the masses. */
+function isAbsoluteState_(sheet, L) { return reads_(sheet.getRange(L.contentCell).getFormula(), L.massRange); }
 
-/** Relative content state: D4 is the formula computing the masses from the content. */
-function isRelativeState_(sheet) { return reads_(sheet.getRange('D4').getFormula(), 'E4:E'); }
+/** Relative content state: the mass cell is the formula computing the masses from the content. */
+function isRelativeState_(sheet, L) { return reads_(sheet.getRange(L.massCell).getFormula(), L.contentRange); }
 
 /** Did the edit put at least one value into the range? (Clearing cells is not typing.) */
 function hasTyped_(range) {
@@ -272,15 +310,15 @@ function hasTyped_(range) {
 }
 
 /**
- * D3 was edited. In the absolute state D3 is the sum, so a typed value there switches to the relative state (D3 becomes the typed
- * total). An emptied D3 gets its sum back. In the relative state D3 is the typed total and nothing happens.
+ * The total mass was edited. In the absolute state it is the sum, so a typed value there switches to the relative state (it becomes
+ * the typed total). An emptied total gets its sum back. In the relative state it is the typed total and nothing happens.
  */
-function onTotalEdited_(sheet) {
-  if (!isAbsoluteState_(sheet)) return;
-  const total = sheet.getRange(MASS_TOTAL_CELL);
-  if (reads_(total.getFormula(), 'D4:D')) return;
-  if (String(total.getValue()).trim() === '') { setFormula_(sheet, MASS_TOTAL_CELL, TOTAL_SUM_FORMULA); return; }
-  switchToRelative_(sheet, null);
+function onTotalEdited_(sheet, L) {
+  if (!isAbsoluteState_(sheet, L)) return;
+  const total = sheet.getRange(L.totalCell);
+  if (reads_(total.getFormula(), L.massRange)) return;
+  if (String(total.getValue()).trim() === '') { setFormula_(sheet, L.totalCell, formulas_(L).totalSum); return; }
+  switchToRelative_(sheet, L, null);
 }
 
 /**
@@ -294,89 +332,92 @@ function setFormula_(sheet, a1, formula) {
   if (/^#(ERROR|BŁĄD)/i.test(String(cell.getDisplayValue()).trim())) cell.setFormula(formula.replace(/;/g, ','));
 }
 
-/** The last row (at least HEAD_ROW) with something in one of the columns. */
-function lastDataRow_(sheet, cols) {
+/** The last row (at least the marker row) with something in one of the columns. */
+function lastDataRow_(sheet, L, cols) {
   const last = sheet.getLastRow();
-  let result = HEAD_ROW;
-  if (last < HEAD_ROW) return result;
+  let result = L.head;
+  if (last < L.head) return result;
   cols.forEach(c => {
-    const v = sheet.getRange(HEAD_ROW, c, last - HEAD_ROW + 1, 1).getValues();
+    const v = sheet.getRange(L.head, c, last - L.head + 1, 1).getValues();
     for (let i = v.length - 1; i >= 0; i--) {
-      if (String(v[i][0]).trim() !== '') { result = Math.max(result, HEAD_ROW + i); break; }
+      if (String(v[i][0]).trim() !== '') { result = Math.max(result, L.head + i); break; }
     }
   });
   return result;
 }
 
-/** Puts the typed values of the edited range over `arr` (an array indexed from HEAD_ROW). */
-function applyTyped_(arr, edited) {
+/** Puts the typed values of the edited range over `arr` (an array indexed from the marker row). */
+function applyTyped_(arr, L, edited) {
   if (!edited) return;
   edited.getValues().forEach((r, i) => {
-    if (r[0] !== '' && r[0] !== null) arr[edited.getRow() + i - HEAD_ROW] = r[0];
+    if (r[0] !== '' && r[0] !== null) arr[edited.getRow() + i - L.head] = r[0];
   });
 }
 
 /**
- * Absolute mass -> relative content. The contents (E4:E) become typed values: the share of every mass in the total of the masses,
- * the edited cells keeping what was typed. The total mass (D3) becomes a typed number too (what it was; or what the user typed
- * in it), and D4:D turns into D3 * E. `edited` = the typed cells of E4:E, or null when D3 was edited.
+ * Absolute mass -> relative content. The contents become typed values: the share of every mass in the total of the masses,
+ * the edited cells keeping what was typed. The total mass becomes a typed number too (what it was; or what the user typed
+ * in it), and the mass column turns into total * content. `edited` = the typed cells of the content column, or null when the
+ * total was edited.
  */
-function switchToRelative_(sheet, edited) {
-  const last = Math.max(lastDataRow_(sheet, [KEY_COL, VALUE_COL]), edited ? edited.getLastRow() : 0);
-  const n = last - HEAD_ROW + 1;
-  const masses = sheet.getRange(HEAD_ROW, VALUE_COL, n, 1).getValues().map(r => r[0]);
+function switchToRelative_(sheet, L, edited) {
+  const last = Math.max(lastDataRow_(sheet, L, [KEY_COL, VALUE_COL]), edited ? edited.getLastRow() : 0);
+  const n = last - L.head + 1;
+  const masses = sheet.getRange(L.head, VALUE_COL, n, 1).getValues().map(r => r[0]);
   const sum = masses.reduce((s, v) => s + (typeof v === 'number' ? v : 0), 0);
   const content = masses.map(v => (typeof v === 'number' && sum ? v / sum : ''));
-  applyTyped_(content, edited);
+  applyTyped_(content, L, edited);
 
-  if (edited) sheet.getRange(MASS_TOTAL_CELL).setValue(sum);           // the formula goes, the number stays
-  sheet.getRange(HEAD_ROW, CONTENT_COL, n, 1).setValues(content.map(v => [v]));
+  if (edited) sheet.getRange(L.totalCell).setValue(sum);               // the formula goes, the number stays
+  sheet.getRange(L.head, CONTENT_COL, n, 1).setValues(content.map(v => [v]));
   const maxRows = sheet.getMaxRows();
-  sheet.getRange(HEAD_ROW, VALUE_COL, maxRows - HEAD_ROW + 1, 1).clearContent();
-  setFormula_(sheet, 'D4', MASS_FORMULA);
+  sheet.getRange(L.head, VALUE_COL, maxRows - L.head + 1, 1).clearContent();
+  setFormula_(sheet, L.massCell, formulas_(L).mass);
 }
 
 /**
- * Relative content -> absolute mass. The masses (D4:D) become typed values: total mass * content of each row, the edited cells
- * keeping what was typed. D3 turns into the sum of the masses and E4:E into the content computed from them.
- * `edited` = the typed cells of D4:D.
+ * Relative content -> absolute mass. The masses become typed values: total mass * content of each row, the edited cells
+ * keeping what was typed. The total turns into the sum of the masses and the content column into the content computed from them.
+ * `edited` = the typed cells of the mass column.
  */
-function switchToAbsolute_(sheet, edited) {
-  const last = Math.max(lastDataRow_(sheet, [KEY_COL, CONTENT_COL]), edited ? edited.getLastRow() : 0);
-  const n = last - HEAD_ROW + 1;
-  const total = toNumber_(sheet.getRange(MASS_TOTAL_CELL).getValue());
-  const content = sheet.getRange(HEAD_ROW, CONTENT_COL, n, 1).getValues().map(r => r[0]);
+function switchToAbsolute_(sheet, L, edited) {
+  const last = Math.max(lastDataRow_(sheet, L, [KEY_COL, CONTENT_COL]), edited ? edited.getLastRow() : 0);
+  const n = last - L.head + 1;
+  const total = toNumber_(sheet.getRange(L.totalCell).getValue());
+  const content = sheet.getRange(L.head, CONTENT_COL, n, 1).getValues().map(r => r[0]);
   const masses = content.map(v => (typeof v === 'number' && Number.isFinite(total) ? total * v : ''));
-  applyTyped_(masses, edited);
+  applyTyped_(masses, L, edited);
 
   const maxRows = sheet.getMaxRows();
-  sheet.getRange(HEAD_ROW, CONTENT_COL, maxRows - HEAD_ROW + 1, 1).clearContent();
-  sheet.getRange(HEAD_ROW, VALUE_COL, n, 1).setValues(masses.map(v => [v]));
-  setFormula_(sheet, MASS_TOTAL_CELL, TOTAL_SUM_FORMULA);
-  setFormula_(sheet, 'E4', CONTENT_FORMULA);
+  sheet.getRange(L.head, CONTENT_COL, maxRows - L.head + 1, 1).clearContent();
+  sheet.getRange(L.head, VALUE_COL, n, 1).setValues(masses.map(v => [v]));
+  const F = formulas_(L);
+  setFormula_(sheet, L.totalCell, F.totalSum);
+  setFormula_(sheet, L.contentCell, F.content);
 }
 
 /**
- * FIRST_ROW .. (last row with data in column B) + 1: data validation copied from VALIDATION_CELL into the cells of column B that
- * have none (existing validations are not checked), and alternating backgrounds in B:G (first row white, second grey).
+ * The row under the marker .. (last row with data in column B) + 1: data validation copied from the marker row's cell of column B
+ * into the cells of column B that have none (existing validations are not checked), and alternating backgrounds in B:G
+ * (first row white, second grey).
  */
-function formatRecipeSheet_(sheet) {
+function formatRecipeSheet_(sheet, L) {
   const maxRows = sheet.getMaxRows();
-  if (maxRows < FIRST_ROW) return;
+  if (maxRows < L.first) return;
 
   const lastRow = sheet.getLastRow();
-  let lastData = FIRST_ROW - 1;
-  if (lastRow >= FIRST_ROW) {
-    const keys = sheet.getRange(FIRST_ROW, KEY_COL, lastRow - FIRST_ROW + 1, 1).getValues();
+  let lastData = L.first - 1;
+  if (lastRow >= L.first) {
+    const keys = sheet.getRange(L.first, KEY_COL, lastRow - L.first + 1, 1).getValues();
     for (let i = keys.length - 1; i >= 0; i--) {
-      if (String(keys[i][0]).trim() !== '') { lastData = FIRST_ROW + i; break; }
+      if (String(keys[i][0]).trim() !== '') { lastData = L.first + i; break; }
     }
   }
   const end = Math.min(lastData + 1, maxRows);
-  const count = end - FIRST_ROW + 1;
+  const count = end - L.first + 1;
 
-  const keyRange = sheet.getRange(FIRST_ROW, KEY_COL, count, 1);
-  const template = sheet.getRange(VALIDATION_CELL).getDataValidation();
+  const keyRange = sheet.getRange(L.first, KEY_COL, count, 1);
+  const template = sheet.getRange(L.validationCell).getDataValidation();
   if (template) {
     const rules = keyRange.getDataValidations();
     if (rules.some(r => !r[0])) {
@@ -391,7 +432,7 @@ function formatRecipeSheet_(sheet) {
     for (let c = KEY_COL; c <= LAST_FORMAT_COL; c++) row.push(color);
     colors.push(row);
   }
-  sheet.getRange(FIRST_ROW, KEY_COL, count, LAST_FORMAT_COL - KEY_COL + 1).setBackgrounds(colors);
+  sheet.getRange(L.first, KEY_COL, count, LAST_FORMAT_COL - KEY_COL + 1).setBackgrounds(colors);
 }
 
 /** Puts `text` into the cell only when it is empty or holds just "-" (and there is something to put). */
@@ -518,18 +559,19 @@ function loadRecipe(row) {
 
     const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(RECIPE_SHEET);
     if (!sheet) return { error: 'Brak arkusza "' + RECIPE_SHEET + '".' };
+    const L = layout_(sheet);
 
-    if (isRelativeState_(sheet)) switchToAbsolute_(sheet, null);     // D4:D is spilled there
+    if (isRelativeState_(sheet, L)) switchToAbsolute_(sheet, L, null);     // the mass column is spilled there
 
-    // the first empty row, as the data range tells, but never above FIRST_ROW
-    const start = Math.max(sheet.getDataRange().getLastRow() + 1, FIRST_ROW);
+    // the first empty row, as the data range tells, but never above the row under the marker
+    const start = Math.max(sheet.getDataRange().getLastRow() + 1, L.first);
     sheet.getRange(start, KEY_COL, components.length, 1).setValues(components.map(c => [c.name]));
     sheet.getRange(start, VALUE_COL, components.length, 1).setValues(components.map(c => [c.value]));
 
     fillIfBlank_(sheet, RECIPE_NAME_CELL, chosen.recipe);
     fillIfBlank_(sheet, PRODUCT_CELL, chosen.product ? '(' + chosen.product + ')' : '');
 
-    formatRecipeSheet_(sheet);       // a script write does not fire onEdit
+    formatRecipeSheet_(sheet, L);    // a script write does not fire onEdit
 
     SpreadsheetApp.flush();
     return { ok: true, written: components.length, warning: warnings.join('\n') };
