@@ -29,7 +29,8 @@
 //   relative content  E{r}:E (content %) are typed, D3 (total mass) is typed, D{r}:D = D3 * E
 // Any edit of the computed column of a state (a typed value, the same value again, or clearing cells) switches to the other state,
 // in which that column is the typed one. The values of that column are kept as they were (except the edited cells, which take
-// what is in them after the edit - a cleared cell stays empty) and the other column becomes computed.
+// what is in them after the edit - a cleared cell stays empty) and the other column becomes computed. In the absolute state the
+// computed column is the content AND the total (D3), so editing or clearing D3 switches as well.
 // Values pasted over both columns at once need a decision. A SIMPLE trigger has no permission to open a dialog ("Określone
 // uprawnienia nie są wystarczające do wywołania Ui.showModalDialog"), so an INSTALLABLE edit trigger (onEditInstalled, switched
 // on once from the menu) opens PasteDialog.html asking which column to keep.
@@ -308,14 +309,14 @@ function isAbsoluteState_(sheet, L) { return reads_(sheet.getRange(L.contentCell
 function isRelativeState_(sheet, L) { return reads_(sheet.getRange(L.massCell).getFormula(), L.contentRange); }
 
 /**
- * The total mass was edited. In the absolute state it is the sum, so a typed value there switches to the relative state (it becomes
- * the typed total). An emptied total gets its sum back. In the relative state it is the typed total and nothing happens.
+ * The total mass was edited. In the absolute state it is the computed sum, so any edit of it - a typed value, the same value or
+ * clearing - switches to the relative state, in which it is the typed total (an emptied total stays empty). Does nothing when it
+ * still holds the sum (the edit did not change it) or the sheet is already in the relative state, where editing the total is just
+ * changing it.
  */
 function onTotalEdited_(sheet, L) {
   if (!isAbsoluteState_(sheet, L)) return;
-  const total = sheet.getRange(L.totalCell);
-  if (reads_(total.getFormula(), L.massRange)) return;
-  if (String(total.getValue()).trim() === '') { setFormula_(sheet, L.totalCell, formulas_(L).totalSum); return; }
+  if (reads_(sheet.getRange(L.totalCell).getFormula(), L.massRange)) return;
   switchToRelative_(sheet, L, null);
 }
 
@@ -358,8 +359,8 @@ function applyTyped_(arr, L, edited) {
 /**
  * Absolute mass -> relative content. The contents become typed values: the share of every mass in the total of the masses,
  * the edited cells keeping what they hold after the edit (typed, or empty if they were cleared). The total mass becomes a typed
- * number too (what it was; or what the user typed in it), and the mass column turns into total * content. `edited` = the edited
- * cells of the content column, or null when the total was edited.
+ * number too (what it was; or, when the total itself was edited, what it holds after the edit - possibly empty), and the mass
+ * column turns into total * content. `edited` = the edited cells of the content column, or null when the total was edited.
  */
 function switchToRelative_(sheet, L, edited) {
   const last = Math.max(lastDataRow_(sheet, L, [KEY_COL, VALUE_COL]), edited ? edited.getLastRow() : 0);

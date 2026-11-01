@@ -65,17 +65,19 @@ Column **B** = components (a `Pozycja menu`) from the marker row down; `B{r}` ca
 - Errors in either trigger are not thrown (nobody could see them): `reportError_` writes them to the execution log and shows a toast.
 
 ### State switching (`onEdit`)
-Any edit of the **computed** column of a state switches to the other state, in which that column is the typed one: a new value, **the same value again**, or **clearing** the cells. The values of that column are kept; the edited cells take what they hold after the edit (a typed value, or empty if they were cleared); the other column becomes computed from it.
+Any edit of the **computed** cells of a state switches to the other state, in which they become the typed ones: a new value, **the same value again**, or **clearing**. The values of the column that becomes typed are kept; the edited cells take what they hold after the edit (a typed value, or empty if they were cleared); the other column becomes computed from it.
+
+In the absolute state the computed cells are the content column **and `D3`** (the total). In the relative state they are the mass column.
 
 - **Absolute → relative** (`switchToRelative_`), on an edit of the content column or of `D3`:
   - the content column becomes typed numbers = every mass / the sum of the masses, the edited cells keeping what they hold (empty stays empty).
-  - `D3` becomes a typed number: the former sum (edit in the content column), or what the user typed (edit of `D3`).
-  - the mass column is cleared and its first cell gets the mass formula. Masses of the other rows therefore stay the same.
+  - `D3` becomes a typed number: the former sum (edit in the content column), or what the user did to it (typed value, or **empty if it was cleared**).
+  - the mass column is cleared and its first cell gets the mass formula. Masses of the other rows therefore stay the same, except that an empty `D3` makes every computed mass `0`, because the content is kept and the total is gone.
 - **Relative → absolute** (`switchToAbsolute_`), on an edit of the mass column:
   - the mass column becomes typed numbers = total * content of each row, the edited cells keeping what they hold (empty stays empty).
   - `D3` gets the `SUM` of the masses, the content column is cleared and its first cell gets the content formula.
 - Which state the sheet is in is read from the marker-row formula of the column the edit did NOT touch (`isAbsoluteState_`: the content cell reads the mass range; `isRelativeState_`: the mass cell reads the content range), because the edit may have overwritten the formula of its own column. Edits of the *typed* column never switch, clearing included.
-- `D3`: in the absolute state a typed value switches; an emptied `D3` gets its `SUM` back instead (it is not an input). In the relative state editing `D3` is just changing the total.
+- `onTotalEdited_`: in the absolute state any edit of `D3` that leaves something other than the `SUM` switches (clearing included). In the relative state editing `D3` is just changing the total.
 - Multi-column edits are ignored by the state switch (a paste over D and E is handled by `onEditInstalled`).
 - The script only acts on edit events it receives. If Google Sheets sends none (for example when the same value is entered over a cell that already shows exactly that value), nothing can switch.
 - Note: after a switch to relative, the contents typed may not add up to 100 %; the "Brakuje do 100%" cell shows the rest.
