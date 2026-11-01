@@ -27,8 +27,9 @@
 // Two states of the destination (see CLAUDE.md), r = the marker row:
 //   absolute mass     D{r}:D (masses) are typed, D3 = SUM(D{r}:D), E{r}:E (content %) = D / D$3
 //   relative content  E{r}:E (content %) are typed, D3 (total mass) is typed, D{r}:D = D3 * E
-// Editing the computed column of a state switches to the other state, in which that column is the typed one. The values of that
-// column are kept as they were (except the edited cells, which take the typed value) and the other column becomes computed.
+// Any edit of the computed column of a state (a typed value, the same value again, or clearing cells) switches to the other state,
+// in which that column is the typed one. The values of that column are kept as they were (except the edited cells, which take
+// what is in them after the edit - a cleared cell stays empty) and the other column becomes computed.
 // Values pasted over both columns at once need a decision. A SIMPLE trigger has no permission to open a dialog ("Określone
 // uprawnienia nie są wystarczające do wywołania Ui.showModalDialog"), so an INSTALLABLE edit trigger (onEditInstalled, switched
 // on once from the menu) opens PasteDialog.html asking which column to keep.
@@ -145,7 +146,7 @@ function reportError_(where, err) {
 /**
  * Simple trigger on the destination sheet:
  *  - an edit of the total mass or of the mass column (the computed cells of the relative state) / the content column (the computed
- *    cells of the absolute state) switches the state;
+ *    cells of the absolute state) switches the state - whatever the edit was: a new value, the same value, or clearing;
  *  - an edit that touches column B under the marker row re-applies the formatting.
  * The state is read from the marker-row formula of the column the edit did NOT touch, because the edit may have overwritten its own.
  * (An edit over D and E together is left to onEditInstalled.)
@@ -166,11 +167,11 @@ function onEdit(e) {
     const oneColumn = range.getColumn() === range.getLastColumn();
     if (oneColumn && range.getRow() >= L.head) {
       if (range.getColumn() === VALUE_COL) {
-        if (!isAbsoluteState_(sheet, L) && hasTyped_(range)) switchToAbsolute_(sheet, L, range);
+        if (!isAbsoluteState_(sheet, L)) switchToAbsolute_(sheet, L, range);
         return;
       }
       if (range.getColumn() === CONTENT_COL) {
-        if (!isRelativeState_(sheet, L) && hasTyped_(range)) switchToRelative_(sheet, L, range);
+        if (!isRelativeState_(sheet, L)) switchToRelative_(sheet, L, range);
         return;
       }
     }
@@ -306,11 +307,6 @@ function isAbsoluteState_(sheet, L) { return reads_(sheet.getRange(L.contentCell
 /** Relative content state: the mass cell is the formula computing the masses from the content. */
 function isRelativeState_(sheet, L) { return reads_(sheet.getRange(L.massCell).getFormula(), L.contentRange); }
 
-/** Did the edit put at least one value into the range? (Clearing cells is not typing.) */
-function hasTyped_(range) {
-  return range.getValues().some(r => r[0] !== '' && r[0] !== null);
-}
-
 /**
  * The total mass was edited. In the absolute state it is the sum, so a typed value there switches to the relative state (it becomes
  * the typed total). An emptied total gets its sum back. In the relative state it is the typed total and nothing happens.
@@ -348,19 +344,22 @@ function lastDataRow_(sheet, L, cols) {
   return result;
 }
 
-/** Puts the typed values of the edited range over `arr` (an array indexed from the marker row). */
+/**
+ * Puts what the edited cells hold after the edit over `arr` (an array indexed from the marker row). A cleared cell gives '', so it
+ * stays empty in the column that becomes the typed one.
+ */
 function applyTyped_(arr, L, edited) {
   if (!edited) return;
   edited.getValues().forEach((r, i) => {
-    if (r[0] !== '' && r[0] !== null) arr[edited.getRow() + i - L.head] = r[0];
+    arr[edited.getRow() + i - L.head] = r[0] === null ? '' : r[0];
   });
 }
 
 /**
  * Absolute mass -> relative content. The contents become typed values: the share of every mass in the total of the masses,
- * the edited cells keeping what was typed. The total mass becomes a typed number too (what it was; or what the user typed
- * in it), and the mass column turns into total * content. `edited` = the typed cells of the content column, or null when the
- * total was edited.
+ * the edited cells keeping what they hold after the edit (typed, or empty if they were cleared). The total mass becomes a typed
+ * number too (what it was; or what the user typed in it), and the mass column turns into total * content. `edited` = the edited
+ * cells of the content column, or null when the total was edited.
  */
 function switchToRelative_(sheet, L, edited) {
   const last = Math.max(lastDataRow_(sheet, L, [KEY_COL, VALUE_COL]), edited ? edited.getLastRow() : 0);
@@ -379,8 +378,8 @@ function switchToRelative_(sheet, L, edited) {
 
 /**
  * Relative content -> absolute mass. The masses become typed values: total mass * content of each row, the edited cells
- * keeping what was typed. The total turns into the sum of the masses and the content column into the content computed from them.
- * `edited` = the typed cells of the mass column.
+ * keeping what they hold after the edit (typed, or empty if they were cleared). The total turns into the sum of the masses and the
+ * content column into the content computed from them. `edited` = the edited cells of the mass column.
  */
 function switchToAbsolute_(sheet, L, edited) {
   const last = Math.max(lastDataRow_(sheet, L, [KEY_COL, CONTENT_COL]), edited ? edited.getLastRow() : 0);
