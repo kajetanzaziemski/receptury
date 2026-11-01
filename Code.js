@@ -12,9 +12,9 @@
 // to "Pozycja menu"; the FIRST row with the code gives the menu position, which is what goes into the destination.
 // A code that is not found there is loaded as it is and reported in the warning.
 //
-// Rows of the destination are NOT fixed numbers: the row that holds the array formulas and the template data validation is
-// the one with MARKER ("TECHNICZNY") in column A (see layout_). Everything is relative to it: the total row is the row right above,
-// the entries start in the row right below.
+// The header block of the destination is at FIXED addresses (title cells B1 and B2, the total mass in D3 = TOTAL_ROW). The only
+// row that moves is the one that holds the array formulas and the template data validation: it is found by MARKER
+// ("TECHNICZNY") in column A (see layout_). The entries start in the row right below it.
 //
 // Destination: every component is appended below the data range (never above the row under the marker), the menu position in
 // column B and its mass in column D. Nothing is merged with what is already there, so duplicates are possible. The cells
@@ -25,8 +25,8 @@
 // and B:G get alternating row backgrounds (first row white, second grey).
 //
 // Two states of the destination (see CLAUDE.md), r = the marker row:
-//   absolute mass     D{r}:D (masses) are typed, D{r-1} = SUM(D{r}:D), E{r}:E (content %) = D / D${r-1}
-//   relative content  E{r}:E (content %) are typed, D{r-1} (total mass) is typed, D{r}:D = D{r-1} * E
+//   absolute mass     D{r}:D (masses) are typed, D3 = SUM(D{r}:D), E{r}:E (content %) = D / D$3
+//   relative content  E{r}:E (content %) are typed, D3 (total mass) is typed, D{r}:D = D3 * E
 // Editing the computed column of a state switches to the other state, in which that column is the typed one. The values of that
 // column are kept as they were (except the edited cells, which take the typed value) and the other column becomes computed.
 // Values pasted over both columns at once need a decision. A SIMPLE trigger has no permission to open a dialog ("Określone
@@ -46,6 +46,7 @@ const KEY_COL = 2;          // B
 const VALUE_COL = 4;        // D
 const CONTENT_COL = 5;      // E
 const LAST_FORMAT_COL = 7;  // G
+const TOTAL_ROW = 3;        // the row of the total mass (D3): a fixed address of the header block
 const MARKER = 'TECHNICZNY';
 const MARKER_SEARCH_ROWS = 200;
 const RECIPE_NAME_CELL = 'B1';
@@ -55,10 +56,11 @@ const ROW_GREY = '#f3f3f3';
 const PASTE_TRIGGER_HANDLER = 'onEditInstalled';
 
 /**
- * Where things are on the destination sheet, from the row with MARKER in column A:
+ * Where things are on the destination sheet. The total mass is at the fixed TOTAL_ROW; the rest is relative to the row with MARKER
+ * in column A:
  * { head (the marker row: array formulas, template validation, first row of the mass / content columns),
- *   total (the row above: total mass), first (the first row the loader may write to), totalCell, validationCell,
- *   massCell, contentCell, massRange, contentRange }. Throws a Polish message when there is no marker.
+ *   total (TOTAL_ROW), first (the first row the loader may write to), totalCell, validationCell,
+ *   massCell, contentCell, massRange, contentRange }. Throws a Polish message when there is no marker (or it is not below the total).
  */
 function layout_(sheet) {
   const n = Math.min(sheet.getMaxRows(), MARKER_SEARCH_ROWS);
@@ -66,12 +68,12 @@ function layout_(sheet) {
   const i = col.findIndex(r => String(r[0]).trim().toUpperCase() === MARKER);
   if (i < 0) throw new Error('Nie znaleziono znacznika "' + MARKER + '" w kolumnie A arkusza "' + sheet.getName() + '".');
   const head = i + 1;
-  if (head < 2) throw new Error('Znacznik "' + MARKER + '" nie może być w pierwszym wierszu – nad nim jest wiersz sumy.');
+  if (head <= TOTAL_ROW) throw new Error('Znacznik "' + MARKER + '" musi być poniżej wiersza ' + TOTAL_ROW + ' (masa łączna).');
   return {
     head: head,
-    total: head - 1,
+    total: TOTAL_ROW,
     first: head + 1,
-    totalCell: 'D' + (head - 1),
+    totalCell: 'D' + TOTAL_ROW,
     validationCell: 'B' + head,
     massCell: 'D' + head,
     contentCell: 'E' + head,

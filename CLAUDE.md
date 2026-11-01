@@ -19,32 +19,26 @@ A code from `Receptura - skład` is translated to the `Pozycja menu` of its FIRS
 
 ### `Receptura` (destination)
 
-#### Rows are found by a marker, never by number
-The row with `TECHNICZNY` in column A (`MARKER`, `layout_`) is the **marker row**. The header block above it can grow or shrink; nothing in the script uses absolute row numbers for it. Let `r` be the marker row:
+#### Fixed addresses and the marker row
+The header block sits at **fixed addresses**: the two title cells `B1` (recipe name) and `B2` (product), and the **total mass in `D3`** (`TOTAL_ROW` = 3). These are constants at the top of `Code.js` (`RECIPE_NAME_CELL`, `PRODUCT_CELL`, `TOTAL_ROW`); if the header block moves, change them there.
 
-| What | Where |
-|---|---|
-| array formulas, the template data validation (in `B{r}`), first row of the mass / content columns | row `r` |
-| total mass cell | `D{r-1}` |
-| entries (what the loader and the formatting work on) | rows `r+1` and below |
+The only thing that is *found* is the **marker row**: the row with `TECHNICZNY` in column A (`MARKER`, `layout_`). Let `r` be that row. It holds the array formulas, the template data validation (in `B{r}`) and is the first row of the mass / content columns. Extra header rows may sit between row 3 and `r`; entries (what the loader and the formatting work on) start at row `r+1`.
 
-The search looks in the first 200 rows of column A, case-insensitively. No marker (or a marker in row 1) gives a Polish error message (a toast from the triggers, `{ error }` from the sidebar / dialog calls). **Keep the marker in column A of that row.**
+The search looks in the first 200 rows of column A, case-insensitively. No marker, or a marker in row 3 or above, gives a Polish error message (a toast from the triggers, `{ error }` from the sidebar / dialog calls). **Keep the marker in column A of that row.**
 
-Do not overwrite the header block, except the two title cells and the cells the state switch rewrites (the total, mass and content cells of rows `r-1` and `r`).
-
-The two title cells are still the absolute addresses `RECIPE_NAME_CELL` = `B1` and `PRODUCT_CELL` = `B2` (constants at the top of `Code.js`). Check they still point where the recipe name and the product go after a header change.
+Do not overwrite the header block, except the two title cells and the cells the state switch rewrites (`D3`, and the mass and content cells of row `r`).
 
 Formulas are written with `;` separators (the user's Polish locale) in `Code.js` too. Apps Script's `setFormula` is documented to want `,`, so `setFormula_` writes the `;` form first and, if the cell shows a parse error (`#ERROR!` / `#BŁĄD!`), writes it again with commas. Keep any new formula free of `;` inside string literals, or that fallback breaks it.
 
 #### The header block, as the user described it (the original four rows; the same in both states unless noted)
-Originally the marker row was row 4, the total row 3. All row numbers below shift with the marker.
+Originally the marker row was row 4. A row was later inserted after row 3, so `r` is now 5; the cells of rows 1–3 did not move. In the table `{r}` is the marker row.
 
 | | C | D | E | F | G |
 |---|---|---|---|---|---|
-| header | Cena (zł/kg) | Masa (kg) | Zawartość (%) | Koszt (zł) | Udział w koszcie (%) |
-| labels | Produkt: | Łącznie: | Brakuje do 100%: | Łącznie: | Łącznie: |
-| total row `r-1` | `=F{r-1}/D{r-1}` | **state dependent** | `=1-SUM(E{r}:E)` | `=SUM(F{r}:F)` | `=SUM(G{r}:G)` |
-| marker row `r` | `=ArrayFormula(IF(B{r}:B<>"";XLOOKUP(B{r}:B;'Komponenty recepturowe'!C:C;'Komponenty recepturowe'!B:B;"???");))` | **state dependent** | **state dependent** | `=ArrayFormula(IF(D{r}:D<>"";D{r}:D*C{r}:C;))` | `=ArrayFormula(IF(F{r}:F<>"";F{r}:F/F${r-1};))` |
+| row 1: header | Cena (zł/kg) | Masa (kg) | Zawartość (%) | Koszt (zł) | Udział w koszcie (%) |
+| row 2: labels | Produkt: | Łącznie: | Brakuje do 100%: | Łącznie: | Łącznie: |
+| row 3: totals | `=F3/D3` | **state dependent** | `=1-SUM(E{r}:E)` | `=SUM(F{r}:F)` | `=SUM(G{r}:G)` |
+| marker row `{r}` | `=ArrayFormula(IF(B{r}:B<>"";XLOOKUP(B{r}:B;'Komponenty recepturowe'!C:C;'Komponenty recepturowe'!B:B;"???");))` | **state dependent** | **state dependent** | `=ArrayFormula(IF(D{r}:D<>"";D{r}:D*C{r}:C;))` | `=ArrayFormula(IF(F{r}:F<>"";F{r}:F/F$3;))` |
 
 The cells that do not depend on the state are never rewritten by the script; Sheets moves their references itself when rows are inserted.
 
@@ -53,10 +47,10 @@ The sheet is always in one of them. Each has one typed column and one computed (
 
 | | Absolute mass (default) | Relative content |
 |---|---|---|
-| Typed | `D{r}:D` masses | `E{r}:E` content (%), and `D{r-1}` the total mass |
-| `D{r-1}` | `=SUM(D{r}:D)` | typed number |
-| `D{r}` | empty (first typed mass) | `=ArrayFormula(IF(E{r}:E<>"";D{r-1}*E{r}:E;))` |
-| `E{r}` | `=ArrayFormula(IF(D{r}:D<>"";D{r}:D/D${r-1};))` | empty (first typed content) |
+| Typed | `D{r}:D` masses | `E{r}:E` content (%), and `D3` the total mass |
+| `D3` | `=SUM(D{r}:D)` | typed number |
+| `D{r}` | empty (first typed mass) | `=ArrayFormula(IF(E{r}:E<>"";D3*E{r}:E;))` |
+| `E{r}` | `=ArrayFormula(IF(D{r}:D<>"";D{r}:D/D$3;))` | empty (first typed content) |
 
 Never write values into a spilled column below the marker row yourself, or the spill breaks (`#REF!`). `C`, `F`, `G` are always spilled.
 
@@ -73,25 +67,25 @@ Column **B** = components (a `Pozycja menu`) from the marker row down; `B{r}` ca
 ### State switching (`onEdit`)
 Editing the **computed** column of a state switches to the other state, in which that column is the typed one. The values of that column are kept; only the edited cells take the typed value; the other column becomes computed from it.
 
-- **Absolute → relative** (`switchToRelative_`), on an edit of the content column or of the total cell:
+- **Absolute → relative** (`switchToRelative_`), on an edit of the content column or of `D3`:
   - the content column becomes typed numbers = every mass / the sum of the masses, the edited cells keeping what was typed.
-  - the total becomes a typed number: the former sum (edit in the content column), or what the user typed (edit of the total).
+  - `D3` becomes a typed number: the former sum (edit in the content column), or what the user typed (edit of `D3`).
   - the mass column is cleared and its first cell gets the mass formula. Masses of the other rows therefore stay the same.
 - **Relative → absolute** (`switchToAbsolute_`), on an edit of the mass column:
   - the mass column becomes typed numbers = total * content of each row, the edited cells keeping what was typed.
-  - the total gets the `SUM` of the masses, the content column is cleared and its first cell gets the content formula.
+  - `D3` gets the `SUM` of the masses, the content column is cleared and its first cell gets the content formula.
 - Which state the sheet is in is read from the marker-row formula of the column the edit did NOT touch (`isAbsoluteState_`: the content cell reads the mass range; `isRelativeState_`: the mass cell reads the content range), because the edit may have overwritten the formula of its own column.
-- Clearing cells does not switch (`hasTyped_`). An emptied total in the absolute state gets its `SUM` back. Editing the total in the relative state is just changing the total.
+- Clearing cells does not switch (`hasTyped_`). An emptied `D3` in the absolute state gets its `SUM` back. Editing `D3` in the relative state is just changing the total.
 - Multi-column edits are ignored by the state switch (a paste over D and E is handled by `onEditInstalled`).
 - Note: after a switch to relative, the contents typed may not add up to 100 %; the "Brakuje do 100%" cell shows the rest.
 
 ### Paste over D and E together (`onEditInstalled` + `PasteDialog.html`)
 Without the installable trigger a two-column paste is not handled. With it:
 - The dialog shows the pasted rows (row, component from column B, mass, content), lets the user choose **keep masses (D)** or **keep contents (E)**, edit the values of the kept column, and (when keeping contents) edit the **total mass**. Percent input like `30%` is read as `0.3`.
-- `applyPasteChoice` then applies it (`payload.priorAbsolute` is the state before the paste, read from the total cell being the sum):
+- `applyPasteChoice` then applies it (`payload.priorAbsolute` is the state before the paste, read from `D3` being the sum):
   - **keep D**: the dialog masses are written to `D`; the sheet ends in the absolute state (contents computed). From the relative state the other rows' masses are total * their content, as in `switchToAbsolute_`.
-  - **keep E**: the dialog contents are written to `E`, the total = the dialog total; the sheet ends in the relative state. Rows that were not pasted keep their content (from the absolute state: mass / the total the dialog opened with).
-- The default total offered is the sum of the masses (from the absolute state) or the current total (from the relative state). The default choice is the typed column of the state before the paste.
+  - **keep E**: the dialog contents are written to `E`, `D3` = the dialog total; the sheet ends in the relative state. Rows that were not pasted keep their content (from the absolute state: mass / the total the dialog opened with).
+- The default total offered is the sum of the masses (from the absolute state) or the current `D3` (from the relative state). The default choice is the typed column of the state before the paste.
 - Cancel leaves the pasted values exactly as pasted (and the formulas that the paste overwrote stay overwritten).
 - Clearing a selection that spans D and E does not open the dialog.
 
